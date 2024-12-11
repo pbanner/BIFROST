@@ -8,7 +8,7 @@ optical fibers.
 
 Patrick Banner
 RbRy Lab, University of Maryland-College Park
-December 8, 2024
+December 10, 2024
 
 ####################################################################################################
 """
@@ -58,19 +58,19 @@ _PhotoelasticConstants = {'SiO2': [0.121, 0.270], 'GeO2': [0.130, 0.288]}
 # between 0 and 1, respectively
 # -------------------------------------------------------------------------------------------------------------------------------------
 def _validatePositive(val):
-    if not isinstance(val, int | float | np.int32 | np.float64):
+    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc):
         raise TypeError("Number expected; this is a" + str(type(val)))
     if not (val > 0):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateNonnegative(val):
-    if not isinstance(val, int | float | np.int32 | np.float64):
+    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc):
         raise TypeError("Number expected.")
     if not (val >= 0):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateFractions(frac):
-    if not isinstance(frac, int | float | np.int32 | np.float64):
+    if not isinstance(frac, float | np.float64):
         raise TypeError("Number expected.")
     if not ((0 <= frac) and (frac <= 1)):
         raise ValueError("Fraction should be between 0 and 1.")
@@ -786,6 +786,9 @@ class Fiber():
         N0: Number of long segments
         arbRotStart: Boolean, whether to start the fiber with an arbitrary
             rotation (sometimes useful in simulatory applications)
+        addRotators: None, single number, or dictionary about
+            arbitrary rotators along the fiber lengths (see initialization
+            or Fiber.random() documentation for more details)
 
     Attributes:
         hingeType: if 0, hinges are FiberPaddles; if 1, hinges are Rotators
@@ -795,6 +798,9 @@ class Fiber():
         startRotator: The Rotator at the start of the fiber (always a
             Rotator object, but its Jones matrix is the identity if arbRotStart
             is False)
+        addedRotators: A dictionary of rotator parameters and fiber lengths for the
+            arbitrary rotators along the long fiber segments, when addRotators
+            is not None
         fibers: The array of FiberLength and FiberPaddleSet objects
             constituting the fiber
         J0: The total Jones matrix of the fiber
@@ -848,6 +854,14 @@ class Fiber():
         self.toggleStartRotator(newVal)
     @property
     def startRotator(self): return self._startRotator
+
+    @property
+    def addRotators(self): return self._addRotators
+    @addRotators.setter
+    def addRotators(self, newVal):
+        self.toggleAddedRotators(newVal)
+    @property
+    def addedRotators(self): return self._addedRotators
 
     @property
     def fibers(self):
@@ -929,20 +943,22 @@ class Fiber():
                 if (len(self.hingeDict['alpha']) == 4):
                     self.hingeDict['alpha'] = np.array([list(self.hingeDict['alpha'])]*N0h)
                 else:
-                    raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(shape(self.hingeDict['alpha'])))
+                    raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(np.shape(self.hingeDict['alpha'])))
             elif (len(np.shape(self.hingeDict['alpha'])) == 2) and (np.shape(self.hingeDict['alpha'])[0] == 1):
                 if (len(self.hingeDict['alpha'][0]) == 4):
                     self.hingeDict['alpha'] = np.array([list(self.hingeDict['alpha'][0])]*N0h)
                 else:
-                    raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(shape(self.hingeDict['alpha'])))
+                    raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(np.shape(self.hingeDict['alpha'])))
             elif (np.shape(self.hingeDict['alpha']) != (N0h, 4)):
-                raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(shape(self.hingeDict['alpha'])))
+                raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(np.shape(self.hingeDict['alpha'])))
         
-        # Now make the fibers
-        segments = np.array([], dtype=object)
+        # Now make the fiber array.
+        # If we aren't putting rotators in the segments, then just interleave the segments
+        # and hinges properly and call it a day. If we ARE adding rotators, then make the
+        # rotators and the proper-length segments and interleave those, putting a hinge
+        # where appropriate.
+        # Pre-make the hinge objects, whatever they are:
         hinges = np.array([], dtype=object)
-        for i in range(self.N0):
-            segments = np.append(segments, FiberLength(self.w0, self.segmentDict['T0'][i], self.segmentDict['L0'][i], self.segmentDict['r0'][i], self.segmentDict['r1'][i], self.segmentDict['epsilon'][i], self.segmentDict['m'][i], self.segmentDict['Tref'][i], self.segmentDict['rc'][i], self.segmentDict['tr'][i], diffN = self.segmentDict['diffN'][i]))
         if (self.hingeType == 0):
             for i in range(N0h):
                 npad = self.hingeDict['nPaddles'][i]
@@ -951,21 +967,32 @@ class Fiber():
         elif (self.hingeType == 1):
             for i in range(N0h):
                 hinges = np.append(hinges, Rotator(self.hingeDict['alpha'][i]))
-
-        # Now we interleave into a single array
+        # Now put it all together.
         fa = np.array([], dtype=object)
         if (self.arbRotStart):
             fa = np.append(fa, self._startRotator)
         if (self.hingeStart):
             fa = np.append(fa, hinges[0])
-        for i in range(self.N0-1):
-            fa = np.append(fa, segments[i])
-            fa = np.append(fa, hinges[i+self.hingeStart])
-        fa = np.append(fa, segments[self.N0-1])
-        if (self.hingeEnd):
-            fa = np.append(fa, hinges[N0h-1])
+        for i in range(self.N0):
+            # Add the segment
+            if (self.addRotators == None):
+                fa = np.append(fa, FiberLength(self.w0, self.segmentDict['T0'][i], self.segmentDict['L0'][i], self.segmentDict['r0'][i], self.segmentDict['r1'][i], self.segmentDict['epsilon'][i], self.segmentDict['m'][i], self.segmentDict['Tref'][i], self.segmentDict['rc'][i], self.segmentDict['tr'][i], diffN = self.segmentDict['diffN'][i]))
+            else:
+                Ns = 0
+                thisSegmentDict = {'T0': self.segmentDict['T0'][i], 'L0': self._addedRotators['L'][i], 'r0': self.segmentDict['r0'][i], 'r1': self.segmentDict['r1'][i], 'epsilon': self.segmentDict['epsilon'][i], 'm': self.segmentDict['m'][i], 'Tref': self.segmentDict['Tref'][i], 'rc': self.segmentDict['rc'][i], 'tr': self.segmentDict['tr'][i], 'diffN': self.segmentDict['diffN'][i]}
+                if isinstance(self.addRotators, int | float | np.int32 | np.float64):
+                    Ns, _ = np.divmod(self.segmentDict['L0'][i], self.addRotators)
+                elif isinstance(self.addRotators, dict):
+                    Ns, _ = np.divmod(self.segmentDict['L0'][i], self.addRotators['mean'])
+                fseg = Fiber(self.w0, thisSegmentDict, {'alpha': self._addedRotators['alpha'][i]}, int(Ns)+1, hingeType = 1, hingeStart = False, hingeEnd = False, arbRotStart = False, addRotators = None)
+                fa = np.append(fa, fseg.fibers.copy()).flatten()
+                del fseg
+            # Add the next hinge
+            if ((i != self.N0-1) or self.hingeEnd):
+                fa = np.append(fa, hinges[i + int(self.hingeStart)])
             
         return fa
+        
     @property
     def J0(self):
         fa = self.fibers
@@ -983,7 +1010,7 @@ class Fiber():
         
     # N0: number of long segments
     # hingeType = 0 (fiber paddle sets), 1 (arbitrary rotators)
-    def __init__(self, w0, segmentDict, hingeDict, N0, hingeType = 0, hingeStart = True, hingeEnd = True, arbRotStart = False):
+    def __init__(self, w0, segmentDict, hingeDict, N0, hingeType = 0, hingeStart = True, hingeEnd = True, arbRotStart = False, addRotators = None):
         """
         Initializes a fiber.
 
@@ -1000,6 +1027,12 @@ class Fiber():
                 (default True)
             arbRotStart (optional): Boolean, whether to start the fiber with an arbitrary rotator
                 (default False)
+            addRotators (optional): A parameter to add arbitrary rotators along the fiber segments,
+                separate from the hinges. Can be either None (no rotators added) or one of the following:
+                (1) a single number, the exact distance between each rotator (in meters) (it will be rounded
+                    automatically to the nearest multiple of the fiber length);
+                (2) a dictionary with 'mean', 'scale', and 'dist' to get random distances between rotators
+                    (see _getRandom documentation for more details).
         """
         self.w0 = w0
         self.N0 = N0
@@ -1008,6 +1041,7 @@ class Fiber():
         self.hingeType = hingeType
         self.hingeStart = hingeStart; self.hingeEnd = hingeEnd
         self.arbRotStart = arbRotStart
+        self.addRotators = addRotators
 
     def toggleStartRotator(self, newVal):
         if (newVal):
@@ -1016,6 +1050,40 @@ class Fiber():
         else:
             self._arbRotStart = False
             self._startRotator = Rotator([1,0,0,0])
+
+    def toggleAddedRotators(self, newVal):
+        if (newVal == None):
+            self._addedRotators = None
+            self._addRotators = None
+        else:
+            # Gotta get the lengths right...
+            Ls = 0
+            if (isinstance(self.segmentDict['L0'], int | float | np.int32 | np.float64)) or (isinstance(self.segmentDict['L0'], np.ndarray) and (len(self.segmentDict['L0']) == 1)):
+                Ls = np.array([self.segmentDict['L0']]*self.N0).flatten()
+            elif (len(self.segmentDict['L0']) != self.N0):
+                raise Exception("Array in segment dictionary with key " + str(p) + " has the wrong shape, should be 1×{:.0f} but is ".format(self.N0) + str(np.shape(self.segmentDict['L0'])))
+            else:
+                Ls = self.segmentDict['L0']
+            # Now make the rotators
+            self._addedRotators = {'alpha': {}, 'L': {}}
+            if isinstance(newVal, int | float | np.int32 | np.float64):
+                for i in range(self.N0):
+                    Ns, rem = np.divmod(Ls[i], newVal)
+                    if (Ns == 0):
+                        raise Exception("The given length is larger than the available length, so no rotators are fitting in this segment.")
+                    Ns = int(Ns)
+                    self._addRotators = newVal
+                    self._addedRotators['alpha'][i] = _getRandom((Ns, 4), **_randomDistDefaults['alpha'])
+                    self._addedRotators['L'][i] = newVal + rem/Ns
+            elif isinstance(newVal, dict):
+                for i in range(self.N0):
+                    Ns, _ = np.divmod(Ls[i], newVal['mean'])
+                    if (Ns == 0):
+                        raise Exception("The given length is larger than the available length, so no rotators are fitting in this segment.")
+                    Ns = int(Ns)
+                    self._addRotators = newVal
+                    self._addedRotators['alpha'][i] = _getRandom((Ns, 4), **_randomDistDefaults['alpha'])
+                    self._addedRotators['L'][i] = _getRandom(int(Ns+1), **newVal)
 
     def calcDGD(self, dw0 = 0.1e-9):
         """
@@ -1055,7 +1123,7 @@ class Fiber():
         return dgd
 
     @classmethod
-    def random(cls, w0, Ltot, N0, segmentDict, hingeDict, hingeType = 0, hingeStart = True, hingeEnd = True, arbRotStart = False):
+    def random(cls, w0, Ltot, N0, segmentDict, hingeDict, hingeType = 0, hingeStart = True, hingeEnd = True, arbRotStart = False, addRotators = None):
         """
         Generates a random optical fiber following input specs.
         
@@ -1092,6 +1160,11 @@ class Fiber():
                 (default True)
             arbRotStart (optional): Boolean, whether to start the fiber with an arbitrary rotator
                 (default False)
+            addRotators (optional): A parameter to add arbitrary rotators along the fiber segments,
+                separate from the hinges. Can be either None (no rotators added) or one of the following:
+                (1) a single number, the exact distance between each rotator (in meters);
+                (2) a dictionary with 'mean', 'scale', and 'dist' to get random distances between rotators
+                    (see _getRandom documentation for more details).
 
         Outputs: A random Fiber following the given specifications.
         
@@ -1205,4 +1278,4 @@ class Fiber():
         lengthDiff = (segmentLength + hingeLength) - Ltot
         newSegmentDict['L0'] = newSegmentDict['L0'] - (lengthDiff/N0)
     
-        return cls(w0, newSegmentDict, newHingeDict, N0, hingeType = hingeType, hingeStart = hingeStart, hingeEnd = hingeEnd, arbRotStart = arbRotStart)
+        return cls(w0, newSegmentDict, newHingeDict, N0, hingeType = hingeType, hingeStart = hingeStart, hingeEnd = hingeEnd, arbRotStart = arbRotStart, addRotators = addRotators)
