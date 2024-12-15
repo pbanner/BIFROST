@@ -1,6 +1,6 @@
 # Optical Fiber Simulation
 
-This Python library provides a set of measured values, methods, and classes for the simulation of polarization mode dispersion in optical fibers.
+This Python library provides a set of measured values, methods, and classes for the simulation of polarization mode dispersion in optical fibers. The underlying physics and relevant context for this project can be found in [these Overleaf notes](https://www.overleaf.com/read/cbrbpthjkprh#af039f), especially Section 8.
 
 Specifically, the ``fibers.py`` module provides the following classes (see their individual documentations for more details):
 
