@@ -8,7 +8,7 @@ optical fibers.
 
 Patrick Banner
 RbRy Lab, University of Maryland-College Park
-December 10, 2024
+December 18, 2024
 
 ####################################################################################################
 """
@@ -146,7 +146,7 @@ def _calc_B_BND(w0, n0, p11, p12, nu_p, r0, rc):
         return 0
     return (2*pi/w0)*((n0**3)/4)*(p11-p12)*(1+nu_p)*(r0**2/rc**2)
 def _calc_B_TWS(n0, p11, p12, tr):
-    return ((n0**2)/2)*(p11-p12)*(tr*pi/180)
+    return ((n0**2)/2)*(p11-p12)*(tr)
 
 # Calculate Jones matrix given birefringences
 def _calc_J0(beta, B_CNC, B_ATS, B_BND, B_TWS, Lt):
@@ -202,7 +202,7 @@ _randomDistDefaults = {'T0': {'mean': 25, 'scale': 2, 'dist': 'normal'},
                       'nPaddles': {'mean': 3, 'scale': 1, 'dist': 'uniform_int'},
                       'Ns': {'mean': 3, 'scale': 2, 'dist': 'uniform_int'},
                       'gapLs': {'mean': 0.02, 'scale': 0.005, 'dist': 'uniform'},
-                      'angles': {'mean': 50, 'scale': 50, 'dist': 'uniform'},
+                      'angles': {'mean': 0, 'scale': 100*pi/180, 'dist': 'uniform'},
                       'rps': {'mean': 0.05, 'scale': 0.02, 'dist': 'uniform'},
                       'L0': {'scale': 10, 'dist': 'normal'},
                       'alpha': {'mean': 0.0, 'scale': 1.0, 'dist': 'normal'}
@@ -262,7 +262,7 @@ class FiberLength():
             r_y < r_x. epsilon is related as e = sqrt(1 - 1/epsilon^2).
             Then r_x = r0*(1+e^2/4) and r_y = r0*(1-e^2/4).
         rc: Bend radius of curvature
-        tr: Twist rate
+        tr: Twist rate (rad/m)
 
     Attributes (derived quantities):
         n0: Core index of refraction
@@ -526,6 +526,38 @@ class FiberLength():
         """
         return np.abs(2*pi/(self.B_CNC + self.B_ATS + self.B_BND))
 
+    def calcD_CD(self, dw0 = 0.1e-9):
+        """
+        Method for calculating the chromatic dispersion of the fiber length.
+        Returns three numbers: in order, the effective D_CD from the propagation
+        constant from the mode (which is the one you generally want I believe),
+        D_CD for the core, D_CD for the cladding.
+        Parameters:
+            dw0 (optional): the small wavelength step to take (m), default 0.1e-9
+
+        Outputs: dcd, the D_CD in ps/(nm.km)
+        """
+        # Store current variables
+        wb = self.w0
+        nB = [self.n1, self.beta/(2*pi/self.w0), self.n0]
+
+        # Get relevant parameters for ± dw0
+        self.w0 = self._w0 - dw0
+        nA = [self.n1, self.beta/(2*pi/self.w0), self.n0]
+        self.w0 = self._w0 + 2*dw0
+        nC = [self.n1, self.beta/(2*pi/self.w0), self.n0]
+
+        # Reset values for this object
+        self.w0 = wb
+
+        dcd = np.zeros(3)
+        for i in range(3):
+            #dlambda = (2*pi*C_c)/self.w0**2*dw0
+            dcd[i] = -self.w0/C_c*(nC[i] - 2*nB[i] + nA[i])/dw0**2*1e12*1e-9*1e3
+
+        dcd = dcd[[1,2,0]]
+        return dcd
+
 # Class FiberPaddleSet() definition
 # -------------------------------------------------------------------------------------------------------------------------------------
 class FiberPaddleSet():
@@ -551,7 +583,7 @@ class FiberPaddleSet():
             section of twisted fiber after the last paddle or not.
         
         rps: Radii of curvature for each paddle (m)
-        angles: The angle of each paddle (°)
+        angles: The angle of each paddle (rad)
         Ns: The number of turns of fiber on each paddle
         gapLs: The lengths of each of the straight sections of fiber
             between the paddles, including one before the first paddle
@@ -592,14 +624,14 @@ class FiberPaddleSet():
     @property
     def finalTwistBool(self): return self._ftb
     # Properties of each component
-    @property
-    def rps(self): return self._rps
-    @property
-    def angles(self): return self._angles
-    @property
-    def Ns(self): return self._Ns
-    @property
-    def gapLs(self): return self._gapLs
+    # @property
+    # def rps(self): return self._rps
+    # @property
+    # def angles(self): return self._angles
+    # @property
+    # def Ns(self): return self._Ns
+    # @property
+    # def gapLs(self): return self._gapLs
 
     @property
     def fibers(self):
@@ -658,26 +690,26 @@ class FiberPaddleSet():
     # at a time - val should take the form [index, new value]
     # where index (starting from 0) specifies which thing to
     # modify and new value is its new value
-    @rps.setter
-    def rps(self, val):
-        if (val[0] > self.nPaddles-1):
-            raise Exception("Trying to modify a paddle that doesn't exist.")
-        self._rps[val[0]] = _validatePositive(val[1])
-    @angles.setter
-    def angles(self, val):
-        if (val[0] > self.nPaddles-1):
-            raise Exception("Trying to modify a paddle that doesn't exist.")
-        self._angles[val[0]] = val[1]
-    @Ns.setter
-    def Ns(self, val):
-        if (val[0] > self.nPaddles-1):
-            raise Exception("Trying to modify a paddle that doesn't exist.")
-        self._Ns[val[0]] = _validatePositive(val[1])
-    @gapLs.setter
-    def gapLs(self, val):
-        if (val[0] > self.nPaddles+int(self.finalTwistBool)-1):
-            raise Exception("Trying to modify a fiber length that doesn't exist.")
-        self._gapLs[val[0]] = _validatePositive(val[1])
+    # @rps.setter
+    # def rps(self, val):
+    #     if (val[0] > self.nPaddles-1):
+    #         raise Exception("Trying to modify a paddle that doesn't exist.")
+    #     self._rps[val[0]] = _validatePositive(val[1])
+    # @angles.setter
+    # def angles(self, val):
+    #     if (val[0] > self.nPaddles-1):
+    #         raise Exception("Trying to modify a paddle that doesn't exist.")
+    #     self._angles[val[0]] = val[1]
+    # @Ns.setter
+    # def Ns(self, val):
+    #     if (val[0] > self.nPaddles-1):
+    #         raise Exception("Trying to modify a paddle that doesn't exist.")
+    #     self._Ns[val[0]] = _validatePositive(val[1])
+    # @gapLs.setter
+    # def gapLs(self, val):
+    #     if (val[0] > self.nPaddles+int(self.finalTwistBool)-1):
+    #         raise Exception("Trying to modify a fiber length that doesn't exist.")
+    #     self._gapLs[val[0]] = _validatePositive(val[1])
 
     # We're going to let the entire set have the same fiber properties
     def __init__(self, w0, T0, r0, r1, epsilon, m, Tref, nPaddles, rps, angles, Ns, gapLs, diffN = 0, finalTwistBool = False):
@@ -694,7 +726,7 @@ class FiberPaddleSet():
             Tref: Reference temperature for the lengths (°C)
             nPaddles: Number of paddles
             rps: Radii of curvature for each paddle (m) (array of length nPaddles)
-            angles: The angle of each paddle (°) (array of length nPaddles)
+            angles: The angle of each paddle (rad) (array of length nPaddles)
             Ns: The number of turns of fiber on each paddle (array of length nPaddles)
             gapLs: The lengths of each of the straight sections of fiber
                 between the paddles, including one before the first paddle
@@ -732,8 +764,8 @@ class FiberPaddleSet():
             self.m = diffN*nsi/(nge - nsi)
         self.Tref = Tref
         self._nPaddles = nPaddles
-        self._rps = rps; self._angles = angles; self._Ns = Ns
-        self._gapLs = gapLs
+        self.rps = rps; self.angles = angles; self.Ns = Ns
+        self.gapLs = gapLs
         self.finalTwistBool = finalTwistBool
 
 # Class Rotator() definition
