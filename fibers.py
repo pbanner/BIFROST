@@ -8,12 +8,13 @@ optical fibers.
 
 Patrick Banner
 RbRy Lab, University of Maryland-College Park
-December 18, 2024
+December 27, 2024
 
 ####################################################################################################
 """
 
 import numpy as np
+from scipy import optimize as opt
 
 # Constants
 # -------------------------------------------------------------------------------------------------------------------------------------
@@ -26,9 +27,11 @@ C_c = 299792458
 # Intended for use in formula Bi*w0^2/(w0^2 - Ci^2)
 # Overall structure for the list is [Bi, Ci], with Bi in in 1/um^2, Ci is in um
 # For silica, each list is a list of five coefficients representing the T^n
-# coefficients, for temperature variation; for germania, they are single coeffs
+# coefficients, for temperature variation. For germania, they are single coeffs
 # measured at 24°C, and the calculating method will add on the thermo-optic
-# coefficients for the change with temperature
+# coefficients for the change with temperature. For fluorine, they are the linear
+# and quadratic coefficients in the molar fraction of fluorine, to be added
+# to the pure silica number.
 _SellmeierCoeffs = {'SiO2': np.array(
                             [[[1.10127, -4.94251e-5, 5.27414e-7, -1.59700e-9, 1.75949e-12],
                               [-8.906e-2, 9.0873e-6, -6.53638e-8, 7.77072e-11, 6.84605e-14]],
@@ -41,7 +44,15 @@ _SellmeierCoeffs = {'SiO2': np.array(
                             [[0.80686642, 0.068972606],
                              [0.71815848, 0.15396605],
                              [0.85416831, 11.841931]]
-                            )
+                            ),
+                    'F': np.array(
+                         [[[-61.25, 0.2565],
+                           [-23.0,0.101]],
+                          [[73.9,-1.836],
+                           [10.7,-0.005]],
+                          [[233.5,-5.82],
+                           [1090.5,-24.695]]]
+                         )
                    }
 # Coefficients of thermal expansion (/K or /°C)
 _CTE = {'SiO2': 5.4e-7, 'GeO2': 10e-6}
@@ -51,6 +62,8 @@ _SofteningTemperature = {'SiO2': 1100, 'GeO2': 300}
 _PoissonRatio = {'SiO2': 0.170, 'GeO2': 0.212}
 # Photo-elastic constants [p11, p12]
 _PhotoelasticConstants = {'SiO2': [0.121, 0.270], 'GeO2': [0.130, 0.288]}
+# Young's moduli in Pascals
+_YoungModulus = {'SiO2': 74e9, 'GeO2': 45.5e9}
 
 # Validation utility methods
 # These methods just check if the input matches various conditions,
@@ -70,24 +83,14 @@ def _validateNonnegative(val):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateFractions(frac):
-    if not isinstance(frac, float | np.float64):
+    if not isinstance(frac, float | np.float64 | int | np.int32):
         raise TypeError("Number expected.")
     if not ((0 <= frac) and (frac <= 1)):
-        raise ValueError("Fraction should be between 0 and 1.")
+        raise ValueError("Fraction should be between 0 and 1. This fraction is {:.3f}.".format(frac))
     return frac
 
 # Methods for calculating material properties of silica-germania binary glasses
 # -------------------------------------------------------------------------------------------------------------------------------------
-def _calcN_Si(w0, T0):
-    """ Get the refractive index of silica at a given temperature and wavelength. """
-    wc = w0*1e6; Tc = T0 + 273.15 # Unit conversions
-    Tpows = np.array([Tc**i for i in [0,1,2,3,4]])
-    sc = np.zeros((3,2))
-    for i in range(3):
-        for j in range(2):
-            sc[i][j] = np.dot(_SellmeierCoeffs['SiO2'][i][j], Tpows)
-    n0 = np.sqrt(1 + np.sum(np.array([sc[i][0]*wc**2/(wc**2 - sc[i][1]**2) for i in range(len(sc))])))
-    return n0
 def _calcN_Ge(w0, T0):
     """ Get the refractive index of germania at a given temperature and wavelength. """
     # We have Sellmeier coefficients and a formula for the thermo-optic coefficient
@@ -96,17 +99,75 @@ def _calcN_Ge(w0, T0):
     n0 = np.sqrt(1 + np.sum(np.array([_SellmeierCoeffs['GeO2'][i][0]*wc**2/(wc**2 - _SellmeierCoeffs['GeO2'][i][1]**2) for i in range(len(_SellmeierCoeffs['GeO2']))])))
     Delta_n0 = 6.2153e-13/4*(Tc**4 - (24+273.15)**4) - 5.3387e-10/3*(Tc**3 - (24+273.15)**3) + 1.6654e-7/2*(Tc**2 - (24+273.15)**2)
     return n0 + Delta_n0
-def _calcNs(w0, T0, m):
+def _calcNs(w0, T0, m0, m1):
     """
-    Get the refractive index of a Si-Ge mix at a given temperature, wavelength, and doping concentration.
-    Arguments: w0 (wavelength, m), T0 (temperature, °C), m (molar percentage germania)
-    Returns: n0 (refractive index of doped mixture), n1 (refractive index of silica only)
+    Calculates the refractive indices for the core and cladding silica-based material at
+    wavelength w0 (m) and temperature T0 (°C). The molar fractions are m0 for the core and
+    m1 for the cladding. If m is negative, dope the silica with fluorine; if positive,
+    dope it with germania.
+    Returns: n0 (refractive index of core), n1 (refractive index of cladding)
     """
-    nsi = _calcN_Si(w0, T0)
-    nge = _calcN_Ge(w0, T0)
-    n0 = (1-m)*nsi + m*nge
-    n1 = nsi
+    wc = w0*1e6; Tc = T0 + 273.15 # Unit conversions
+    Tpows = np.array([Tc**i for i in [0,1,2,3,4]])
+    nGe = _calcN_Ge(w0, T0)
+    sc0 = np.zeros((3,2))
+    sc1 = np.zeros((3,2))
+    for i in range(3):
+        for j in range(2):
+            sc0[i][j] = np.dot(_SellmeierCoeffs['SiO2'][i][j], Tpows)
+            sc1[i][j] = sc0[i][j] + (m1 < 0)*(_SellmeierCoeffs['F'][i][j][0]*np.abs(m1)**2 + _SellmeierCoeffs['F'][i][j][1]*np.abs(m1))
+            sc0[i][j] = sc0[i][j] + (m0 < 0)*(_SellmeierCoeffs['F'][i][j][0]*np.abs(m0)**2 + _SellmeierCoeffs['F'][i][j][1]*np.abs(m0))
+    n0 = np.sqrt(1 + np.sum(np.array([sc0[i][0]*wc**2/(wc**2 - sc0[i][1]**2) for i in range(len(sc0))])))
+    n1 = np.sqrt(1 + np.sum(np.array([sc1[i][0]*wc**2/(wc**2 - sc1[i][1]**2) for i in range(len(sc1))])))
+    if (m0 > 0):
+        n0 = (1-m0)*n0 + m0*nGe
+    if (m1 > 0):
+        n1 = (1-m1)*n1 + m1*nGe
     return n0, n1
+def _fromDiffN(mProps, r0):
+    """
+    Calculates the molar fraction germania of a glass given certain 
+    properties of the fiber. mProps must be a dictionary and keys
+    must include one of n0, n1, m0, m1, neff specifying the refractive
+    index of the core/cleadding, molar conentration of core/cladding,
+    or effective refractive index of the mode; keys must also include ALL
+    of dn, T, and w0, the fractional difference in refractive indices
+    (n0-n1)/n1 between core and cladding, and the temperature (°C) and
+    wavelength (m) at which n0/n1/m0/m1/neff and dn are specified.
+    Parameter r0 is the radius of the core, needed for some of the choices
+    of specification.
+
+    Returns m_co, m_cl (molar fractions germania of the core and cladding).
+    """
+
+    w0 = mProps['w0']; T0 = mProps['T']
+
+    if ('n0' in mProps.keys()):
+        # Core is specified
+        soln = opt.fsolve(lambda m: _calcNs(w0, T0, m[0], m[1]) - np.array([mProps['n0'],mProps['n0']/(1 + mProps['dn'])]), np.array([0,0]))
+        return soln[0], soln[1]
+    elif ('n1' in mProps.keys()):
+        # Cladding is specified
+        soln = opt.fsolve(lambda m: _calcNs(w0, T0, m[0], m[1]) - np.array([mProps['n1']*(1 + mProps['dn']),mProps['n1']]), np.array([0,0]))
+        return soln[0], soln[1]
+    elif ('m0' in mProps.keys()):
+        n0 = _calcNs(w0, T0, mProps['m0'], 0)[0]
+        soln = opt.fsolve(lambda m: _calcNs(w0, T0, mProps['m0'], m)[1] - n0/(1 + mProps['dn']), 0)[0]
+        return mProps['m0'], soln
+    elif ('m1' in mProps.keys()):
+        n1 = _calcNs(w0, T0, 0, mProps['m1'])[1]
+        soln = opt.fsolve(lambda m: _calcNs(w0, T0, m, mProps['m1'])[0] - n1*(1 + mProps['dn']), 0)[0]
+        return soln, mProps['m1']
+    elif ('neff' in mProps.keys()):
+        # Effective mode index is specified...
+        # We use n_eff to find n0 and then use that and dn to calculate m0, m1
+        def func(na):
+            return na**2*((2*pi/w0)**2) - (1/r0**2)*(((1+np.sqrt(2))*r0*(2*pi/w0)*np.sqrt(na**2 - na**2/(1 + mProps['dn'])**2))/(1 + (4 + (r0*(2*pi/w0)*np.sqrt(na**2 - na**2/(1 + mProps['dn'])**2))**4)**(1/4)))**2 - (mProps['neff']*(2*pi/w0))**2
+        nco = opt.fsolve(func, 1.45)[0] # 1.45 is the initial guess
+        soln = opt.fsolve(lambda m: _calcNs(w0, T0, m[0], m[1]) - np.array([nco, nco/(1 + mProps['dn'])]), np.array([0,0]))
+        return soln[0], soln[1]
+    else:
+        raise Exception("mProps missing an index specifier; keys should include one of n0, n1, m0, m1, or neff.")
 
 # Calculate V-parameter and propagation constant beta
 def _calcV(r0, w0, n0, n1):
@@ -115,38 +176,50 @@ def _calcBeta(n0, w0, r0, v):
     return np.sqrt((n0**2)*((2*pi/w0)**2) - (1/r0**2)*(((1+np.sqrt(2))*v)/(1+(4+(v**4))**(1/4)))**2)
 
 # Calculate thermally adjusted length
-def _calcLt(L0, alpha1, T0, Tref):
+def _calcLt(L0, alpha0, T0, Tref):
     """
     Get the length adjusted for thermal expansion.
-    Arguments: L0 (length measured at Tref, m), alpha1 (coeff of thermal expansion, 1/°C),
+    Arguments: L0 (length measured at Tref, m), alpha0 (coeff of thermal expansion, 1/°C),
                T0 (actual temperature, °C), Tref (temp at which L0 is measured, °C)
     """
-    return L0*(1+alpha1*(T0 - Tref))
+    return L0*(1+alpha0*(T0 - Tref))
 
 # Calculate doped coefficient of thermal expansion, softening temperature, 
 # Poisson ratio, and photoelastic constants
 def _calcCTE(m):
+    if (m <= 0):
+        return _CTE['SiO2']
     return (1-m)*_CTE['SiO2'] + m*_CTE['GeO2']
 def _calcTS(m):
+    if (m <= 0):
+        return _SofteningTemperature['SiO2']
     return (1-m)*_SofteningTemperature['SiO2'] + m*_SofteningTemperature['GeO2']
 def _calcPoissonRatio(m):
+    if (m <= 0):
+        return _PoissonRatio['SiO2']
     return (1-m)*_PoissonRatio['SiO2'] + m*_PoissonRatio['GeO2']
 def _calcPhotoelasticConstants(m):
+    if (m <= 0):
+        return _PhotoelasticConstants['SiO2']
     return [(1-m)*_PhotoelasticConstants['SiO2'][0] + m*_PhotoelasticConstants['GeO2'][0],
             (1-m)*_PhotoelasticConstants['SiO2'][1] + m*_PhotoelasticConstants['GeO2'][1]]
+def _calcYoungModulus(m):
+    if (m <= 0):
+        return _YoungModulus['SiO2']
+    return (1-m)*_YoungModulus['SiO2'] + m*_YoungModulus['GeO2']
 
 # Calculate birefringences due to core noncircularity, asymmetric thermal stress,
 # bending, and twisting
 def _calc_B_CNC(epsilon, n0, n1, r0, v):
-    return ((1 - epsilon**2)*(1 - n1**2/n0**2)**(3/2))/(r0) * (4/v**3) * (np.log(v))**3 / (1 + np.log(v))
+    return ((1 - 1/epsilon**2)*(1 - n1**2/n0**2)**(3/2))/(r0) * (4/v**3) * (np.log(v))**3 / (1 + np.log(v))
 def _calc_B_ATS(w0, r0, n0, beta, v, p11, p12, alpha0, alpha1, T0, TS, nu_p, epsilon):
     return (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(p11 - p12)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*((epsilon - 1)/(epsilon + 1)))
-def _calc_B_BND(w0, n0, p11, p12, nu_p, r0, rc):
+def _calc_B_BND(w0, n0, p11, p12, nu_p, r0, rc, E, tf = 0):
     if (rc == 0):
         return 0
-    return (2*pi/w0)*((n0**3)/4)*(p11-p12)*(1+nu_p)*(r0**2/rc**2)
+    return (2*pi/w0)*((n0**3)/2)*(p11-p12)*(1+nu_p)*(0.5*(r0**2/rc**2) + ((2-3*nu_p)/(1-nu_p))*(r0/rc)*(tf/(pi*(r0**2)*E)))
 def _calc_B_TWS(n0, p11, p12, tr):
-    return ((n0**2)/2)*(p11-p12)*(tr)
+    return (1+((n0**2)/2)*(p11-p12))*(tr)
 
 # Calculate Jones matrix given birefringences
 def _calc_J0(beta, B_CNC, B_ATS, B_BND, B_TWS, Lt):
@@ -163,13 +236,13 @@ def _calc_J0(beta, B_CNC, B_ATS, B_BND, B_TWS, Lt):
         Lt (thermally adjusted length, m)
     Return: J0 (the Jones matrix), a 2×2 NumPy array
     """
-    if (B_TWS != 0):
-        return np.array([[np.exp(1.0j*(0*Lt))*np.cos(B_TWS*Lt/2), -np.sin(B_TWS*Lt/2)],
-                         [np.sin(B_TWS*Lt/2), np.exp(1.0j*(0*Lt))*np.cos(B_TWS*Lt/2)]])
-    return np.array([
+    Jbase = np.array([
                     [   np.exp(1.0j*((0 + (B_CNC + B_ATS + B_BND)/2)*Lt)), 0],
                     [0, np.exp(1.0j*((0 - (B_CNC + B_ATS + B_BND)/2)*Lt))]
                     ])
+    if (B_TWS != 0):
+        Jbase = np.matmul(np.array([[np.cos(B_TWS*Lt/2), -np.sin(B_TWS*Lt/2)], [np.sin(B_TWS*Lt/2), np.cos(B_TWS*Lt/2)]]), Jbase)
+    return Jbase
 
 # Making random arbitrary rotators following the Czegledi algorithm
 def makeRotators(n0):
@@ -192,21 +265,24 @@ def makeRotators(n0):
 #         Note: 'L0' can not have 'mean' as the mean is usually determined
 #         by a user input
 _randomDistDefaults = {'T0': {'mean': 25, 'scale': 2, 'dist': 'normal'},
-                      'Tref': 20,
-                      'm': 0,
-                      'diffN': {'mean': 0.036, 'scale': 0.005, 'dist': 'normal'},
-                      'epsilon': {'mean': 1, 'scale': 0.007, 'dist': 'uniform'},
-                      'r0': 4.1e-6, 'r1': 125e-6/2,
-                      'rc': {'mean': 10, 'scale': 10, 'dist': 'uniform'},
-                      'tr': 0,
-                      'nPaddles': {'mean': 3, 'scale': 1, 'dist': 'uniform_int'},
-                      'Ns': {'mean': 3, 'scale': 2, 'dist': 'uniform_int'},
-                      'gapLs': {'mean': 0.02, 'scale': 0.005, 'dist': 'uniform'},
-                      'angles': {'mean': 0, 'scale': 100*pi/180, 'dist': 'uniform'},
-                      'rps': {'mean': 0.05, 'scale': 0.02, 'dist': 'uniform'},
-                      'L0': {'scale': 10, 'dist': 'normal'},
-                      'alpha': {'mean': 0.0, 'scale': 1.0, 'dist': 'normal'}
-                     }
+                       'Tref': 20,
+                       'm0': 0.0036,
+                       'm1': 0,
+                       'mProps': {},
+                       'epsilon': {'mean': 1, 'scale': 0.007, 'dist': 'uniform'},
+                       'r0': 4.1e-6, 'r1': 125e-6/2,
+                       'rc': {'mean': 10, 'scale': 10, 'dist': 'uniform'},
+                       'tr': 0,
+                       'tf': 0,
+                       'nPaddles': {'mean': 3, 'scale': 1, 'dist': 'uniform_int'},
+                       'Ns': {'mean': 3, 'scale': 2, 'dist': 'uniform_int'},
+                       'gapLs': {'mean': 0.02, 'scale': 0.005, 'dist': 'uniform'},
+                       'angles': {'mean': 0, 'scale': 100*pi/180, 'dist': 'uniform'},
+                       'tfs': 0,
+                       'rps': {'mean': 0.05, 'scale': 0.02, 'dist': 'uniform'},
+                       'L0': {'scale': 10, 'dist': 'normal'},
+                       'alpha': {'mean': 0.0, 'scale': 1.0, 'dist': 'normal'}
+                      }
 
 def _getRandom(n0, mean, scale, dist):
     """
@@ -218,10 +294,10 @@ def _getRandom(n0, mean, scale, dist):
         scale: A scaling parameter. For the uniform distributions, specify
                the half-width; for Gaussian distributions, specify the standard deviation
         dist: A string determining the distribution; pick from
-              'uniform': A uniform distribution (mean-scale to mean+scale)
-              'uniform_int': A uniform distribution of integers only
-              'normal' or 'Gaussian': A Gaussian distribution
-              'normal_pos' or 'Gaussian_pos': A Gaussian distribution 
+              uniform: A uniform distribution (mean-scale to mean+scale)
+              uniform_int: A uniform distribution of integers only
+              normal or Gaussian: A Gaussian distribution
+              normal_pos or Gaussian_pos: A Gaussian distribution 
                   cut off at zero, so as to be only the positive part
     """
     if (dist == 'uniform'):
@@ -255,13 +331,18 @@ class FiberLength():
         Tref: Reference temperature at which L0 was measured (in °C)
         r0: Radius of core (in m)
         r1: Outer radius of cladding (in m)
-        m: Molar fraction of germania in the core 
+        m0: Molar fraction in core
+        m1: Molar fraction in cladding
+            ***For both m0 and m1, if negative it's a fraction of fluorine;
+            if positive, it's fraction of germania. It's not recommended to
+            try specifying fractions of fluorine above 3-4%.
         epsilon: Core noncircularity, defined as a/b, where a, b are
             semimajor and semiminor axes
             Sometimes an eccentricity e is defined as (r_y/r_x)^2 for
             r_y < r_x. epsilon is related as e = sqrt(1 - 1/epsilon^2).
             Then r_x = r0*(1+e^2/4) and r_y = r0*(1-e^2/4).
-        rc: Bend radius of curvature
+        rc: Bend radius of curvature (m)
+        tf: Axial tension force on bends (N)
         tr: Twist rate (rad/m)
 
     Attributes (derived quantities):
@@ -275,6 +356,7 @@ class FiberLength():
         nu_p: Poisson's ratio
         p11, p12: Photoelastic constants of the core
         TS: Softening temperature of the core (°C)
+        E: Young's modulus for the core (Pa)
         B_CNC: Birefringence due to core noncircularity (rad/m)
         B_ATS: Birefringence due to asymmetric thermal stress (rad/m)
         B_BND: Birefringence due to bending (rad/m)
@@ -282,21 +364,25 @@ class FiberLength():
         J0: Total Jones matrix
 
     Methods:
-        fromDiffN(diffN, w0, T0): A method that calculates the molar
-            percentage of germania from a given fractional difference
-            in index of refraction diffN, wavelength w0 and temperature T0.
         calcDGD(dw0): Calculate the DGD of the fiber using a small
-            wavelength change dw0 (default 0.1e-9, or 0.1 nm).
+            wavelength change dw0 (default 0.1e-9 m or 0.1 nm).
         calcBeatLength(): Calculates the polarization beat length
             due to the birefringences of core nincircularity, asymmetric
             thermal stress, and bending (ignores twisting for now).
-    
+        calcD_CD(dw0): Calculate the chromatic dispersion coefficient
+            D_CD of the fiber using a small wavelength change dw0
+            (default 0.1e-9 m or 0.1 nm).
+        calcNGEff(dw0): Calculate the effective group index of the
+            fiber using a small wavelength change dw0 (default 0.1e-9
+            m or 0.1 nm).
     """
 
     # Getters for properties
     # User-set properties
     @property
-    def m(self): return self._m
+    def m0(self): return self._m0
+    @property
+    def m1(self): return self._m1
     @property
     def w0(self): return self._w0
     @property
@@ -314,92 +400,102 @@ class FiberLength():
     @property
     def rc(self): return self._rc
     @property
+    def tf(self): return self._tf
+    @property
     def tr(self): return self._tr
     
     # Derived quantities
     @property
     def n0(self):
-        return _calcNs(self.w0, self.T0, self.m)[0]
+        return _calcNs(self.w0, self.T0, self.m0, self.m1)[0]
     @property
     def n1(self):
-        return _calcNs(self.w0, self.T0, self.m)[1]
+        return _calcNs(self.w0, self.T0, self.m0, self.m1)[1]
     @property
     def v(self):
-        n0, n1 = _calcNs(self.w0, self.T0, self.m)
+        n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         return _calcV(self.r0, self.w0, n0, n1)
     @property
     def beta(self):
-        n0, n1 = _calcNs(self.w0, self.T0, self.m)
+        n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         return _calcBeta(n0, self.w0, self.r0, v)
     @property
     def alpha0(self):
-        return _CTE['SiO2']
+        return _calcCTE(self.m0)
     @property
     def alpha1(self):
-        return _calcCTE(self.m)
+        return _calcCTE(self.m1)
     @property
     def Lt(self):
-        alpha1 = _calcCTE(self.m)
-        return _calcLt(self.L0, alpha1, self.T0, self.Tref)
+        alpha0 = _calcCTE(self.m0)
+        return _calcLt(self.L0, alpha0, self.T0, self.Tref)
     @property
     def nu_p(self):
-        return _calcPoissonRatio(self.m)
+        return _calcPoissonRatio(self.m0)
     @property
     def p11(self):
-        return _calcPhotoelasticConstants(self.m)[0]
+        return _calcPhotoelasticConstants(self.m0)[0]
     @property
     def p12(self):
-        return _calcPhotoelasticConstants(self.m)[1]
+        return _calcPhotoelasticConstants(self.m0)[1]
     @property
     def TS(self):
-        return _calcTS(self.m)
+        return _calcTS(self.m0)
+    @property
+    def E(self):
+        return _calcYoungModulus(self.m0)
     @property
     def B_CNC(self):
-        n0, n1 = _calcNs(self.w0, self.T0, self.m)
+        n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         return _calc_B_CNC(self.epsilon, n0, n1, self.r0, v)
     @property
     def B_ATS(self):
-        n0, n1 = _calcNs(self.w0, self.T0, self.m)
+        n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         beta = _calcBeta(n0, self.w0, self.r0, v)
-        p11, p12 = _calcPhotoelasticConstants(self.m)
-        alpha0 = _CTE['SiO2']; alpha1 = _calcCTE(self.m)
-        TS = _calcTS(self.m)
-        nu_p = _calcPoissonRatio(self.m)
+        p11, p12 = _calcPhotoelasticConstants(self.m0)
+        alpha0 = _calcCTE(self.m0); alpha1 = _calcCTE(self.m1)
+        TS = _calcTS(self.m0)
+        nu_p = _calcPoissonRatio(self.m0)
         return _calc_B_ATS(self.w0, self.r0, n0, beta, v, p11, p12, alpha0, alpha1, self.T0, TS, nu_p, self.epsilon)
     @property
     def B_BND(self):
-        n0, n1 = _calcNs(self.w0, self.T0, self.m)
-        p11, p12 = _calcPhotoelasticConstants(self.m)
-        nu_p = _calcPoissonRatio(self.m)
-        return _calc_B_BND(self.w0, n0, p11, p12, nu_p, self.r1, self.rc)
+        n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
+        p11, p12 = _calcPhotoelasticConstants(self.m0)
+        nu_p = _calcPoissonRatio(self.m0)
+        E = _calcYoungModulus(self.m0)
+        return _calc_B_BND(self.w0, n0, p11, p12, nu_p, self.r1, self.rc, E, tf = self.tf)
     @property
     def B_TWS(self):
-        n0, n1 = _calcNs(self.w0, self.T0, self.m)
-        p11, p12 = _calcPhotoelasticConstants(self.m)
+        n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
+        p11, p12 = _calcPhotoelasticConstants(self.m0)
         return _calc_B_TWS(n0, p11, p12, self.tr)
     @property
     def J0(self):
-        n0, n1 = _calcNs(self.w0, self.T0, self.m)
+        n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         beta = _calcBeta(n0, self.w0, self.r0, v)
-        p11, p12 = _calcPhotoelasticConstants(self.m)
-        alpha0 = _CTE['SiO2']; alpha1 = _calcCTE(self.m)
-        Lt = _calcLt(self.L0, alpha1, self.T0, self.Tref)
-        TS = _calcTS(self.m)
-        nu_p = _calcPoissonRatio(self.m)
+        p11, p12 = _calcPhotoelasticConstants(self.m0)
+        alpha0 = _calcCTE(self.m0); alpha1 = _calcCTE(self.m1)
+        Lt = _calcLt(self.L0, alpha0, self.T0, self.Tref)
+        TS = _calcTS(self.m0)
+        E = _calcYoungModulus(self.m0)
+        nu_p = _calcPoissonRatio(self.m0)
         B_CNC = _calc_B_CNC(self.epsilon, n0, n1, self.r0, v)
         B_ATS = _calc_B_ATS(self.w0, self.r0, n0, beta, v, p11, p12, alpha0, alpha1, self.T0, TS, nu_p, self.epsilon)
-        B_BND = _calc_B_BND(self.w0, n0, p11, p12, nu_p, self.r1, self.rc)
+        B_BND = _calc_B_BND(self.w0, n0, p11, p12, nu_p, self.r1, self.rc, E, tf = self.tf)
         B_TWS = _calc_B_TWS(n0, p11, p12, self.tr)
         return _calc_J0(beta, B_CNC, B_ATS, B_BND, B_TWS, Lt)
 
     # Setters for properties
-    @m.setter
-    def m(self, value):
-        self._m = _validateFractions(value)
+    @m0.setter
+    def m0(self, value):
+        self._m0 = value
+    @m1.setter
+    def m1(self, value):
+        self._m1 = value
     @w0.setter
     def w0(self, value):
         self._w0 = _validatePositive(value)
@@ -424,17 +520,17 @@ class FiberLength():
     @rc.setter
     def rc(self, value):
         self._rc = _validateNonnegative(value)
+    @tf.setter
+    def tf(self, value):
+        self._tf = _validateNonnegative(value)
     @tr.setter
     def tr(self, value):
         self._tr = value
 
     # Initialization
-    # Units: w0 (m), T0 (°C), L0 (m), r0,r1 (m), epsilon (unitless), m (unitless), Tref (°C), rc (m), tr(°/m)
-    # rc: if set to zero, treated as infinity
-    # diffN, if nonzero, overrides m; it is the difference (nco - ncl)/nco between core and
-    #      cladding refractive indices, from which m can be determined; specified in absolute
-    #      fraction (e.g. 0.5% difference should be specified as 0.005)
-    def __init__(self, w0, T0, L0, r0, r1, epsilon, m, Tref, rc, tr, diffN = 0):
+    # Units: w0 (m), T0 (°C), L0 (m), r0,r1 (m), epsilon (unitless), m0,m1 (unitless), Tref (°C), rc (m), tf (N), tr(rad/m)
+    # Note on rc: if set to zero, treated as infinity
+    def __init__(self, w0, T0, L0, r0, r1, epsilon, m0, m1, Tref, rc, tf, tr, mProps = {}):
         """
         Initialize a new fiber length. 
         
@@ -446,38 +542,42 @@ class FiberLength():
             r1: outer radius of cladding (m)
             epsilon: core noncircularity, ratio of larger axis to smaller one
                 (see class documentation for more details)
-            m: molar percentage germania (overriden by nonzero diffN)
+            m0, m1: molar fractions of fluorine (if negative) or germania (if positive)
+                of the core, cladding (may be overriden by mProps, see below)
             Tref: temperature for length reference (°C)
             rc: bending radius of curvature (m)
+            tf: axial tension force on bends (N)
             tr: twist rate (rad/m)
-            diffN (optional): the fractional difference in index of refraction
-                between core and cladding; if nonzero, used to determine the molar
-                percentage germania (and overrides the given value of m); default 0
+            mProps (optional): a dictionary with alternate specifications of the
+                doping concentrations of the fiber; if {}, then m0,m1 will be used;
+                if not {}, this will override m0, m1, and keys must include one of
+                n0, n1, m0, m1, neff specifying the refractive index of the core
+                or cladding, the molar concentration of the core or cladding,
+                or effective refractive index of the mode; keys must also include
+                ALL of dn, T, and w0, the fractional difference in refractive
+                indices (n0-n1)/n1 between core and cladding, and the temperature
+                (°C) and wavelength (m) at which n0/n1/m0/m1/neff and dn are
+                specified. Default {}.
         """
         self.w0 = w0
         self.T0 = T0; self.L0 = L0
         self.r0 = r0; self.r1 = r1; self.epsilon = epsilon; 
-        if (diffN == 0):
-            self.m = m
+        if (mProps == {}):
+            if (m0 <= m1):
+                raise Exception("m0 needs to be larger than m1 for a physical fiber. You have m0 = {:.6f} and m1 = {:.6f}.".format(m0, m1))
+            else:
+                self.m0 = m0; self.m1 = m1
         else:
-            self.m = self.fromDiffN(diffN, self.w0, self.T0)
+            if not (np.all([k in mProps.keys() for k in ['dn', 'w0', 'T']]) and np.any([k in mProps.keys() for k in ['n0', 'n1', 'm0', 'm1', 'neff']])):
+                raise Exception("Unable to initialize FiberLength because mProps doesn't contain the right keys. See FiberLength.__init__ documentation for more details.")
+            else:
+                a, b = _fromDiffN(mProps, r0)
+                if (a <= b):
+                    raise Exception("m0 needs to be larger than m1 for a physical fiber. Review your mProps dictionary.")
+                else:
+                    self.m0 = a; self.m1 = b
         self.Tref = Tref
-        self.rc = rc; self.tr = tr
-
-    def fromDiffN(self, diffN, w0, T0):
-        """
-        Calculates the molar fraction germania of a glass given its
-        difference in index of refraction with pure silica at the same
-        temperature.
-
-        Parameters:
-            diffN: the fractional index of refraction difference
-            w0: wavelength (m)
-            T0: temperature (°C)
-        """
-        nsi = _calcN_Si(w0, T0)
-        nge = _calcN_Ge(w0, T0)
-        return diffN*nsi/(nge - nsi)
+        self.rc = rc; self.tf = tf; self.tr = tr
     
     def calcDGD(self, dw0 = 0.1e-9):
         """
@@ -524,39 +624,90 @@ class FiberLength():
         Ignores twisting; only accounts for core nincircularity, asymmetric
         thermal stress, and bending birefringences.
         """
-        return np.abs(2*pi/(self.B_CNC + self.B_ATS + self.B_BND))
+        return np.abs(2*pi/(self.B_CNC + self.B_ATS + self.B_BND + self.B_TWS))
 
     def calcD_CD(self, dw0 = 0.1e-9):
         """
         Method for calculating the chromatic dispersion of the fiber length.
-        Returns three numbers: in order, the effective D_CD from the propagation
-        constant from the mode (which is the one you generally want I believe),
-        D_CD for the core, D_CD for the cladding.
+        Returns the effective D_CD from the propagation constant of the fiber
+        mode.
         Parameters:
             dw0 (optional): the small wavelength step to take (m), default 0.1e-9
 
-        Outputs: dcd, the D_CD in ps/(nm.km)
+        Outputs: the D_CD in ps/(nm.km)
         """
         # Store current variables
         wb = self.w0
-        nB = [self.n1, self.beta/(2*pi/self.w0), self.n0]
+        nB = self.beta/(2*pi/self.w0)
 
         # Get relevant parameters for ± dw0
         self.w0 = self._w0 - dw0
-        nA = [self.n1, self.beta/(2*pi/self.w0), self.n0]
+        nA = self.beta/(2*pi/self.w0)
         self.w0 = self._w0 + 2*dw0
-        nC = [self.n1, self.beta/(2*pi/self.w0), self.n0]
+        nC = self.beta/(2*pi/self.w0)
 
         # Reset values for this object
         self.w0 = wb
 
-        dcd = np.zeros(3)
-        for i in range(3):
-            #dlambda = (2*pi*C_c)/self.w0**2*dw0
-            dcd[i] = -self.w0/C_c*(nC[i] - 2*nB[i] + nA[i])/dw0**2*1e12*1e-9*1e3
-
-        dcd = dcd[[1,2,0]]
+        dcd = -self.w0/C_c*(nC - 2*nB + nA)/dw0**2*1e12*1e-9*1e3
         return dcd
+
+    def calcNGEff(self, dw0 = 0.1e-9):
+        """
+        Method for calculating the effective group index of the fiber,
+        c/v_g = n(lambda) - lambda*dn/d-lambda.
+        
+        Parameters:
+            dw0 (optional): the small wavelength step to take (m), default 0.1e-9
+
+        Outputs: the effective group index
+        """
+        # Store current variables
+        wb = self.w0
+        nb = self.beta/(2*pi/self.w0)
+        # Get relevant parameters for ± dw0
+        self.w0 = wb - dw0
+        na = self.beta/(2*pi/self.w0)
+        self.w0 = wb + dw0
+        nc = self.beta/(2*pi/self.w0)
+        # Reset values for this object
+        self.w0 = wb
+        # Calculate
+        dndwP = (nc-nb)/dw0
+        dndwM = (nb-na)/dw0
+        dndw = (dndwP + dndwM)/2
+        return nb - wb*(dndw)
+
+    def __str__(self):
+        info_array = ["Fiber length, properties:",
+                      "Length: {:.4f} m".format(self.L0),
+                      "Operating wavelength: {:.4f} nm".format(self.w0*1e9),
+                      "Operating temperature: {:.4f} °C".format(self.T0),
+                      "Reference temperature: {:.4f} °C".format(self.Tref),
+                      "Base radius of the core: {:.4f} um".format(self.r0*1e6),
+                      "Radius of the cladding: {:.4f} um".format(self.r1*1e6),
+                      "Noncircularity a/b: {:.4f}".format(self.epsilon),
+                      "Molar fraction of dopant in the core: {:.4f}".format(self.m0),
+                      "Molar fraction of dopant in the cladding: {:.4f}".format(self.m1),
+                      "Core index of refraction: {:.5f}".format(self.n0),
+                      "Cladding index of refraction: {:.5f}".format(self.n1),
+                      "Mode effective index of refraction: {:.5f}".format(self.beta/(2*pi/self.w0)),
+                      "Effective group index: {:.5f}".format(self.calcNGEff()),
+                      "Normalized frequency V: {:.4f}".format(self.v),
+                     ]
+        if (self.rc == 0):
+            info_array = info_array + ["Bend radius of curvature: N/A", "Axial tension on bend: N/A"]
+        else:
+            info_array = info_array + ["Bend radius of curvature: {:.4f} m".format(self.rc), "Axial tension on bend: {:.4f} N".format(self.tf)]
+        if (self.tr == 0):
+            info_array = info_array + ["Twist rate: N/A"]
+        else:
+            info_array = info_array + ["Twist rate: {:.4f} rad/m".format(self.tr)]
+        info_array = info_array + ["Differential group delay: {:.4f} ps".format(self.calcDGD()*1e12),
+                                   "Polarization beat length: {:.4f} m".format(self.calcBeatLength()),
+                                   "Chromatic dispersion coefficient D_CD: {:.4f} ps/(nm^2 km)".format(self.calcD_CD())]
+        sep = '\n'
+        return sep.join(info_array)
 
 # Class FiberPaddleSet() definition
 # -------------------------------------------------------------------------------------------------------------------------------------
@@ -577,36 +728,33 @@ class FiberPaddleSet():
         r0: The radius of the core (m)
         r1: The outer radius of the cladding (m)
         epsilon: Core noncircularity
-        m: The molar percentage of germania
+        m0, m1: Doping concentrations in core, cladding (see FiberLength
+            class documentation for more details)
         nPaddles: Number of paddles
         finalTwistBool: A Boolean to indicate whether there is a final
             section of twisted fiber after the last paddle or not.
         
         rps: Radii of curvature for each paddle (m)
         angles: The angle of each paddle (rad)
+        tfs: Tension forces on each paddle (N)
         Ns: The number of turns of fiber on each paddle
         gapLs: The lengths of each of the straight sections of fiber
             between the paddles, including one before the first paddle
             and, if finalTwistBool is True, one after the last paddle
             (lengths in m)
-        **NOTE:** For the above four properties, after initialization, you
-        can only change one paddle at a time. To do so, use syntax like
-        the following: f.angles = [1, 30]. This  changes the FiberPaddleSet
-        f, and specifically it changes the second paddle (specified by the
-        1), settings its angle to 30°. Or f.rps = [0, 0.05] would set the
-        first paddle's radius to 5 cm.
 
     Attributes:
         fibers: The array of fibers in the paddle set
         J0: The total Jones matrix of the entire paddle set
         L0: The total (non-thermally-adjusted) length of the fiber
             forming the paddle set
-        
     """
 
     # Properties of all components
     @property
-    def m(self): return self._m
+    def m0(self): return self._m0
+    @property
+    def m1(self): return self._m1
     @property
     def w0(self): return self._w0
     @property
@@ -623,15 +771,6 @@ class FiberPaddleSet():
     def nPaddles(self): return self._nPaddles
     @property
     def finalTwistBool(self): return self._ftb
-    # Properties of each component
-    # @property
-    # def rps(self): return self._rps
-    # @property
-    # def angles(self): return self._angles
-    # @property
-    # def Ns(self): return self._Ns
-    # @property
-    # def gapLs(self): return self._gapLs
 
     @property
     def fibers(self):
@@ -640,12 +779,12 @@ class FiberPaddleSet():
         angs = np.concatenate(([0], self.angles))
         for i in range(self.nPaddles):
             # Twist
-            fa = np.append(fa, FiberLength(self.w0, self.T0, self.gapLs[i], self.r0, self.r1, self.epsilon, self.m, self.Tref, 0, (angs[i+1] - angs[i])/self.gapLs[i]))
+            fa = np.append(fa, FiberLength(self.w0, self.T0, self.gapLs[i], self.r0, self.r1, self.epsilon, self.m0, self.m1, self.Tref, 0, 0, (angs[i+1] - angs[i])/self.gapLs[i]))
             # Bend
-            fa = np.append(fa, FiberLength(self.w0, self.T0, 2*pi*self.rps[i]*self.Ns[i], self.r0, self.r1, self.epsilon, self.m, self.Tref, self.rps[i], 0))
+            fa = np.append(fa, FiberLength(self.w0, self.T0, 2*pi*self.rps[i]*self.Ns[i], self.r0, self.r1, self.epsilon, self.m0, self.m1, self.Tref, self.rps[i], self.tfs[i], 0))
         # Final twist
         if (self._ftb):
-            fa = np.append(fa, FiberLength(self.w0, self.T0, self.gapLs[-1], self.r0, self.r1, self.epsilon, self.m, self.Tref, 0, (0-angs[-1])/self.gapLs[-1]))
+            fa = np.append(fa, FiberLength(self.w0, self.T0, self.gapLs[-1], self.r0, self.r1, self.epsilon, self.m0, self.m1, self.Tref, 0, 0, (0-angs[-1])/self.gapLs[-1]))
 
         return fa
     @property
@@ -661,9 +800,12 @@ class FiberPaddleSet():
         return np.sum(self.gapLs) + 2*pi*np.dot(self.rps, self.Ns)
 
     # Setters for properties
-    @m.setter
-    def m(self, value):
-        self._m = _validateFractions(value)
+    @m0.setter
+    def m0(self, value):
+        self._m0 = value
+    @m1.setter
+    def m1(self, value):
+        self._m1 = value
     @w0.setter
     def w0(self, value):
         self._w0 = _validatePositive(value)
@@ -685,34 +827,9 @@ class FiberPaddleSet():
     @finalTwistBool.setter
     def finalTwistBool(self, value):
         self._ftb = value
-    
-    # For these, at least for now, one paddle setting
-    # at a time - val should take the form [index, new value]
-    # where index (starting from 0) specifies which thing to
-    # modify and new value is its new value
-    # @rps.setter
-    # def rps(self, val):
-    #     if (val[0] > self.nPaddles-1):
-    #         raise Exception("Trying to modify a paddle that doesn't exist.")
-    #     self._rps[val[0]] = _validatePositive(val[1])
-    # @angles.setter
-    # def angles(self, val):
-    #     if (val[0] > self.nPaddles-1):
-    #         raise Exception("Trying to modify a paddle that doesn't exist.")
-    #     self._angles[val[0]] = val[1]
-    # @Ns.setter
-    # def Ns(self, val):
-    #     if (val[0] > self.nPaddles-1):
-    #         raise Exception("Trying to modify a paddle that doesn't exist.")
-    #     self._Ns[val[0]] = _validatePositive(val[1])
-    # @gapLs.setter
-    # def gapLs(self, val):
-    #     if (val[0] > self.nPaddles+int(self.finalTwistBool)-1):
-    #         raise Exception("Trying to modify a fiber length that doesn't exist.")
-    #     self._gapLs[val[0]] = _validatePositive(val[1])
 
     # We're going to let the entire set have the same fiber properties
-    def __init__(self, w0, T0, r0, r1, epsilon, m, Tref, nPaddles, rps, angles, Ns, gapLs, diffN = 0, finalTwistBool = False):
+    def __init__(self, w0, T0, r0, r1, epsilon, m0, m1, Tref, nPaddles, rps, angles, tfs, Ns, gapLs, mProps = {}, finalTwistBool = False):
         """
         Initialize a FiberPaddleSet.
 
@@ -722,19 +839,19 @@ class FiberPaddleSet():
             r0: The radius of the core (m)
             r1: The outer radius of the cladding (m)
             epsilon: Core noncircularity
-            m: The molar percentage of germania
+            m0, m1: Doping concentrations in core, cladding (see FiberLength
+                class documentation for more details)
             Tref: Reference temperature for the lengths (°C)
             nPaddles: Number of paddles
             rps: Radii of curvature for each paddle (m) (array of length nPaddles)
             angles: The angle of each paddle (rad) (array of length nPaddles)
+            tfs: The axial tension force on each paddle (N) (array of length nPaddles)
             Ns: The number of turns of fiber on each paddle (array of length nPaddles)
             gapLs: The lengths of each of the straight sections of fiber
                 between the paddles, including one before the first paddle
                 and, if finalTwistBool is True, one after the last paddle
                 (lengths in m) (array of length nPaddles + int(finalTwistBool))
-            diffN (optional): The molar fraction of germania in the fiber, with
-                the same overriding properties as in the FiberLength constructor
-                (default 0)
+            mProps (optional): Same as the FiberLength class (default {})
             finalTwistBool (optional): A Boolean to indicate whether there is a final
                 section of twisted fiber after the last paddle or not (default False)
         """
@@ -756,17 +873,49 @@ class FiberPaddleSet():
         self.w0 = w0
         self.T0 = T0;
         self.r0 = r0; self.r1 = r1; self.epsilon = epsilon; 
-        if (diffN == 0):
-            self.m = m
+        if (mProps == {}):
+            if (m0 <= m1):
+                raise Exception("m0 needs to be larger than m1 for a physical fiber. You have m0 = {:.6f} and m1 = {:.6f}.".format(m0, m1))
+            else:
+                self.m0 = m0; self.m1 = m1
         else:
-            nsi = _calcN_Si(self.w0, self.T0)
-            nge = _calcN_Ge(self.w0, self.T0)
-            self.m = diffN*nsi/(nge - nsi)
+            if not (np.all([k in mProps.keys() for k in ['dn', 'w0', 'T']]) and np.any([k in mProps.keys() for k in ['n0', 'n1', 'm0', 'm1', 'neff']])):
+                raise Exception("Unable to initialize FiberLength because mProps doesn't contain the right keys. See FiberLength.__init__ documentation for more details.")
+            else:
+                a, b = _fromDiffN(mProps, r0)
+                if (a <= b):
+                    raise Exception("m0 needs to be larger than m1 for a physical fiber. Review your mProps dictionary.")
+                else:
+                    self.m0 = a; self.m1 = b
         self.Tref = Tref
         self._nPaddles = nPaddles
-        self.rps = rps; self.angles = angles; self.Ns = Ns
+        self.rps = rps; self.angles = angles; self.tfs = tfs; self.Ns = Ns
         self.gapLs = gapLs
         self.finalTwistBool = finalTwistBool
+
+    def __str__(self):
+        info_array = ["Fiber paddle set, properties:",
+                      "Operating wavelength: {:.4f} nm".format(self.w0*1e9),
+                      "Operating temperature: {:.4f} °C".format(self.T0),
+                      "Reference temperature: {:.4f} °C".format(self.Tref),
+                      "Base radius of the core: {:.4f} um".format(self.r0*1e6),
+                      "Radius of the cladding: {:.4f} um".format(self.r1*1e6),
+                      "Noncircularity a/b: {:.4f}".format(self.epsilon),
+                      "Molar fraction of dopant in the core: {:.4f}".format(self.m0),
+                      "Molar fraction of dopant in the cladding: {:.4f}".format(self.m1),
+                      " ",
+                      "Number of paddles: {:.0f}".format(self.nPaddles),
+                      "Radii of curvature of paddles (m): " + str(self.rps),
+                      "Number of fiber turns on each paddle: " + str(self.Ns),
+                      "Angles of paddles (m): " + str(self.angles),
+                      "Tension forces on wrappings of each paddle (N): " + str(self.tfs),
+                      "Lengths of fiber between each paddle (m): " + str(self.gapLs),
+                      "Total fiber length: {:.4f} m".format(self.L0),
+                      " ",
+                      "Use object.fibers to get more details about each fiber component."
+                     ]
+        sep = '\n'
+        return sep.join(info_array)
 
 # Class Rotator() definition
 # -------------------------------------------------------------------------------------------------------------------------------------
@@ -804,6 +953,9 @@ class Rotator():
             alpha: a 4-vector defining the rotation
         """
         self.alpha = alpha/np.linalg.norm(alpha)
+
+    def __str__(self):
+        return "Arbitrary rotator over angle {:.4f}° about an axis.".format(self.theta*180/pi)
         
 
 # Class Fiber() definition
@@ -842,18 +994,20 @@ class Fiber():
             constituent components. Generally, the value can be either sufficient to
             describe one component, in which case it's used for all components, or it
             can be an array sufficient to describe all components individually.
+            One notable exception to this is mProps: if specified, it needs to be a
+            dictionary of single numbers only.
         segmentDict: A dictionary containing the properties of the long
             segments of the fiber. Should contain keys 'T0', 'L0', 'r0', 'r1',
-            'epsilon', 'm' or 'diffN', 'Tref', 'rc', 'tr' which are each either
-            single numbers or arrays of length N0 (if single number, all segments
+            'epsilon', 'm0' and 'm1' or 'mProps', 'Tref', 'rc', 'tf', 'tr' which are each
+            either single numbers or arrays of length N0 (if single number, all segments
             will have that number as their property).
         hingeDict: A dictionary containing the properties of the hinges of the fiber.
             If hingeType = 1, this dictionary only contains 'alpha', a length-4 array
             or a (4×N0h)-length array.
             If hingeType = 0, this dictionary will needs keys 'T0', 'r0', 'r1', 'epsilon',
-            'm' or 'diffN', 'Tref', 'nPaddles', 'finalTwistBool' (which are single numbers
-            or 1×N0h arrays) and 'rps', 'angles', 'Ns', 'gapLs' (which are 1×nPaddles
-            arrays or N0h×nPaddles arrays).
+            'm0' and 'm1' or 'mProps', 'Tref', 'nPaddles', 'finalTwistBool' (which are
+            single numbers or 1×N0h arrays) and 'rps', 'angles', 'tfs', 'Ns', 'gapLs' (which
+            are 1×nPaddles arrays or N0h×nPaddles arrays).
             Here N0h = N0-1 + hingeStart + hingeEnd.
 
     Methods:
@@ -864,8 +1018,8 @@ class Fiber():
             documentation for more details. Call as Fiber.random().
     """
 
-    segmentDictKeys = np.array(['L0', 'T0', 'Tref', 'diffN', 'epsilon', 'm', 'r0', 'r1', 'rc', 'tr'])
-    hingeDictKeys = np.array(['Ns', 'T0', 'Tref', 'angles', 'diffN', 'epsilon', 'finalTwistBool', 'gapLs', 'm', 'nPaddles', 'r0', 'r1', 'rps'])
+    segmentDictKeys = np.array(['L0', 'T0', 'Tref', 'epsilon', 'm0', 'm1', 'mProps', 'r0', 'r1', 'rc', 'tf', 'tr'])
+    hingeDictKeys = np.array(['Ns', 'T0', 'Tref', 'angles', 'epsilon', 'finalTwistBool', 'gapLs', 'm0', 'm1', 'mProps', 'nPaddles', 'r0', 'r1', 'rps', 'tfs'])
     
     @property
     def w0(self): return self._w0
@@ -905,12 +1059,14 @@ class Fiber():
         if (self.hingeType == 0):
             ref = [[self.segmentDict, self.N0], [self.hingeDict, N0h]]
         for d,n in ref:
-            if ('diffN' in d.keys()):
-                d['m'] = np.zeros(n)
+            if ('mProps' in d.keys() and d['mProps'] != {}):
+                d['m0'] = np.zeros(n)
+                d['m1'] = np.zeros(n)
             else:
-                d['diffN'] = np.zeros(n)
+                d['mProps'] = {}
         if (self.hingeType == 0) and ('finalTwistBool' not in self.hingeDict.keys()):
             self.hingeDict['finalTwistBool'] = np.zeros(N0h)
+        
         # Now both dicts should have a specific set of keys... check that that's true
         d1 = np.sort(list(self.segmentDict.keys()))
         if (len(d1) != len(self.segmentDictKeys)):
@@ -938,7 +1094,44 @@ class Fiber():
         # Now we're going to check each property to see if it's the correct-sized
         # array. If it's a single number or a 1×whatever array, do the conversion
         # here. Throw errors if I really can't make it fit.
+
+        # Pre-process r0 and mProps together (because we need r0 to process mProps)
+        # Do the following for both segmentDict and hingeDict
+        ref = [[self.segmentDict, self.N0]]
+        if (self.hingeType == 0):
+            ref = [[self.segmentDict, self.N0], [self.hingeDict, N0h]]
+        for d,n in ref:
+            # Check if mProps is a dict and, if so, if it has the right keys
+            if not isinstance(d['mProps'], dict):
+                raise Exception("mProps needs to be a dictionary but is not.")
+            elif not ((d['mProps'] == {}) or (np.all([k in d['mProps'].keys() for k in ['dn', 'w0', 'T']]) and np.any([k in d['mProps'].keys() for k in ['n0', 'n1', 'm0', 'm1', 'neff']]))):
+                raise Exception("mProps dictionary is invalid.")
+            else:
+                # mProps is a valid dictionary
+                if (isinstance(d['r0'], int | float | np.int32 | np.float64)) or (isinstance(d['r0'], np.ndarray) and (len(d['r0']) == 1)):
+                    # r0 is a single number...
+                    if (d['mProps'] == {}):
+                        # mProps isn't being used, so m0 and m1 are
+                        # So just standardize r0
+                        d['r0'] = np.array([d['r0']]*n).flatten()
+                    else:
+                        # Everything is a single number and we can compute it for all fiber segments and be done
+                        a, b = _fromDiffN(d['mProps'], d['r0'])
+                        d['m0'] = np.array([a]*n); d['m1'] = np.array([b]*n)
+                        d['r0'] = np.array([d['r0']]*n).flatten()
+                elif (len(d['r0']) != n):
+                    raise Exception("The r0 array of the dictionary is the wrong length.")
+                else:
+                    # If mProps is an empty dictionary don't need to do anything else
+                    if (d['mProps'] != {}):
+                        # r0 is an array of the right length
+                        d['m0'] = np.zeros(n); d['m1'] = np.zeros(n)
+                        for i in range(n):
+                            a, b = _fromDiffN(d['mProps'], d['r0'][i])
+                            d['m0'][i] = a; d['m1'][i] = b
+
         # Conversions for segments
+        self.segmentDict.pop('mProps', None)
         for p in self.segmentDict.keys():
             if (isinstance(self.segmentDict[p], int | float | np.int32 | np.float64)) or (isinstance(self.segmentDict[p], np.ndarray) and (len(self.segmentDict[p]) == 1)):
                 self.segmentDict[p] = np.array([self.segmentDict[p]]*self.N0).flatten()
@@ -946,17 +1139,18 @@ class Fiber():
                 raise Exception("Array in segment dictionary with key " + str(p) + " has the wrong shape, should be 1×{:.0f} but is ".format(self.N0) + str(np.shape(self.segmentDict[p])))
                 
         # Conversions for hinges
+        self.hingeDict.pop('mProps', None)
         if (self.hingeType == 0):
             if (isinstance(self.hingeDict['nPaddles'], int | float | np.int32 | np.float64)) or (isinstance(self.hingeDict['nPaddles'], np.ndarray) and (len(self.hingeDict['nPaddles']) == 1)):
                 self.hingeDict['nPaddles'] = np.array([self.hingeDict['nPaddles']]*N0h).flatten()
             elif (len(self.hingeDict['nPaddles']) != N0h):
                     raise Exception("Array in hinge dictionary with key nPaddles has the wrong shape, should be 1×{:.0f} but is ".format(N0h) + str(np.shape(self.hingeDict['nPaddles'])))
             for p in self.hingeDict.keys():
-                if (p not in ['rps', 'angles', 'Ns', 'gapLs']):
+                if (p not in ['rps', 'angles', 'tfs', 'Ns', 'gapLs']):
                     if (isinstance(self.hingeDict[p], int | float | np.int32 | np.float64)) or (isinstance(self.hingeDict[p], np.ndarray) and (len(self.hingeDict[p]) == 1)):
                         self.hingeDict[p] = np.array([self.hingeDict[p]]*N0h).flatten()
                     elif (len(self.hingeDict[p]) != N0h):
-                        raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape, should be 1×{:.0f} but is ".format(N0h) + str(np.shape(self.segmentDict[p])))
+                        raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape, should be 1×{:.0f} but is ".format(N0h) + str(np.shape(self.hingeDict[p])))
                 else:
                     if (len(np.shape(self.hingeDict[p])) == 1):
                         if (len(self.hingeDict[p]) >= np.max(self.hingeDict['nPaddles'])):
@@ -995,23 +1189,26 @@ class Fiber():
             for i in range(N0h):
                 npad = self.hingeDict['nPaddles'][i]
                 ftb = self.hingeDict['finalTwistBool'][i]
-                hinges = np.append(hinges, FiberPaddleSet(self.w0, self.hingeDict['T0'][i], self.hingeDict['r0'][i], self.hingeDict['r1'][i], self.hingeDict['epsilon'][i], self.hingeDict['m'][i], self.hingeDict['Tref'][i], npad, self.hingeDict['rps'][i][:npad], self.hingeDict['angles'][i][:npad], self.hingeDict['Ns'][i][:npad], self.hingeDict['gapLs'][i][:int(npad+int(ftb))], diffN = self.hingeDict['diffN'][i], finalTwistBool = ftb))
+                hinges = np.append(hinges, FiberPaddleSet(self.w0, self.hingeDict['T0'][i], self.hingeDict['r0'][i], self.hingeDict['r1'][i], self.hingeDict['epsilon'][i], self.hingeDict['m0'][i], self.hingeDict['m1'][i], self.hingeDict['Tref'][i], npad, self.hingeDict['rps'][i][:npad], self.hingeDict['angles'][i][:npad], self.hingeDict['tfs'][i][:npad], self.hingeDict['Ns'][i][:npad], self.hingeDict['gapLs'][i][:int(npad+int(ftb))], mProps = {}, finalTwistBool = ftb))
         elif (self.hingeType == 1):
             for i in range(N0h):
                 hinges = np.append(hinges, Rotator(self.hingeDict['alpha'][i]))
+        
         # Now put it all together.
+        hingeInds = np.array([], dtype=int)
         fa = np.array([], dtype=object)
         if (self.arbRotStart):
             fa = np.append(fa, self._startRotator)
         if (self.hingeStart):
             fa = np.append(fa, hinges[0])
+            hingeInds = np.append(hingeInds, 0)
         for i in range(self.N0):
             # Add the segment
             if (self.addRotators == None):
-                fa = np.append(fa, FiberLength(self.w0, self.segmentDict['T0'][i], self.segmentDict['L0'][i], self.segmentDict['r0'][i], self.segmentDict['r1'][i], self.segmentDict['epsilon'][i], self.segmentDict['m'][i], self.segmentDict['Tref'][i], self.segmentDict['rc'][i], self.segmentDict['tr'][i], diffN = self.segmentDict['diffN'][i]))
+                fa = np.append(fa, FiberLength(self.w0, self.segmentDict['T0'][i], self.segmentDict['L0'][i], self.segmentDict['r0'][i], self.segmentDict['r1'][i], self.segmentDict['epsilon'][i], self.segmentDict['m0'][i], self.segmentDict['m1'][i], self.segmentDict['Tref'][i], self.segmentDict['rc'][i], self.segmentDict['tf'][i], self.segmentDict['tr'][i], mProps = {}))
             else:
                 Ns = 0
-                thisSegmentDict = {'T0': self.segmentDict['T0'][i], 'L0': self._addedRotators['L'][i], 'r0': self.segmentDict['r0'][i], 'r1': self.segmentDict['r1'][i], 'epsilon': self.segmentDict['epsilon'][i], 'm': self.segmentDict['m'][i], 'Tref': self.segmentDict['Tref'][i], 'rc': self.segmentDict['rc'][i], 'tr': self.segmentDict['tr'][i], 'diffN': self.segmentDict['diffN'][i]}
+                thisSegmentDict = {'T0': self.segmentDict['T0'][i], 'L0': self._addedRotators['L'][i], 'r0': self.segmentDict['r0'][i], 'r1': self.segmentDict['r1'][i], 'epsilon': self.segmentDict['epsilon'][i], 'm0': self.segmentDict['m0'][i], 'm1': self.segmentDict['m1'][i], 'Tref': self.segmentDict['Tref'][i], 'rc': self.segmentDict['rc'][i], 'tf': self.segmentDict['tf'][i], 'tr': self.segmentDict['tr'][i], 'mProps': {}}
                 if isinstance(self.addRotators, int | float | np.int32 | np.float64):
                     Ns, _ = np.divmod(self.segmentDict['L0'][i], self.addRotators)
                 elif isinstance(self.addRotators, dict):
@@ -1022,7 +1219,10 @@ class Fiber():
             # Add the next hinge
             if ((i != self.N0-1) or self.hingeEnd):
                 fa = np.append(fa, hinges[i + int(self.hingeStart)])
+                hingeInds = np.append(hingeInds, len(fa)-1)
             
+        if (self._printingBool):
+            return fa, hingeInds
         return fa
         
     @property
@@ -1034,10 +1234,16 @@ class Fiber():
         return Jtot
     @property
     def L0(self):
-        fa = self.fibers
+        fa = 0; hingeInds = 0
+        if (self._printingBool):
+            fa, hingeInds = self.fibers
+        else:
+            fa = self.fibers
         L0 = 0
         for i in range(len(fa)):
             L0 = L0 + fa[i].L0
+        if (self._printingBool):
+            return fa, hingeInds, L0
         return L0
         
     # N0: number of long segments
@@ -1074,6 +1280,9 @@ class Fiber():
         self.hingeStart = hingeStart; self.hingeEnd = hingeEnd
         self.arbRotStart = arbRotStart
         self.addRotators = addRotators
+        
+        # This is a flag for internal use only
+        self._printingBool = False
 
     def toggleStartRotator(self, newVal):
         if (newVal):
@@ -1184,6 +1393,7 @@ class Fiber():
             N0: Number of long birefringent segments
             segmentDict, hingeDict: The dictionaries containing the info about the
                 segments and hinges, to follow the above description.
+                If mProps is specified, it must be single numbers, i.e. it cannot be randomized.
             hingeType (optional): 0 means hinges are FiberPaddleSets, 1 means hinges are
                 arbitrary Rotators (default 0)
             hingeStart (optional): Boolean, whether there's a hinge before the first fiber segment;
@@ -1214,25 +1424,29 @@ class Fiber():
             ref = [[segmentDict, newSegmentDict, N0], [hingeDict, newHingeDict, N0h]]
         for d1,d2,n in ref:
             # Have to handle the doping fraction which can be specified one of two ways
-            # If neither 'm' nor 'diffN' is in there, let the random defaults handle it
+            # If neither 'm0','m1' nor 'mProps' is in there, let the random defaults handle it
             # If they're both in there, pass both along; Fiber() class logic handles it
-            if ('m' not in d1.keys()) and ('diffN' in d1.keys()):
-                d1['m'] = 0
-            elif ('m' in d1.keys()) and ('diffN' not in d1.keys()):
-                d1['diffN'] = 0
+            if (('m0' not in d1.keys()) or ('m1' not in d1.keys())) and ('mProps' in d1.keys()):
+                d1['m0'] = 0; d1['m1'] = 0
+            elif (('m0' in d1.keys()) and ('m1' in d1.keys())) and ('mProps' not in d1.keys()):
+                d1['mProps'] = {}
             # Now loop over each property and pass or randomize as necessary
-            for prop in ['T0', 'Tref', 'epsilon', 'r0', 'r1', 'rc', 'tr', 'm', 'diffN']:
+            for prop in ['T0', 'Tref', 'epsilon', 'r0', 'r1', 'rc', 'tf', 'tr', 'm0', 'm1', 'mProps']:
                 da = d1
                 if (prop not in d1.keys()):
                     da = _randomDistDefaults
+                
                 if isinstance(da[prop], int | float | np.int32 | np.float64 | np.ndarray):
                     d2[prop] = da[prop]
                 elif (isinstance(da[prop], dict) and all([s in da[prop].keys() for s in ['mean', 'scale', 'dist']])):
                     d2[prop] = _getRandom(n, **da[prop])
+                elif (prop == 'mProps'):
+                    # Just gonna assume that what's specified is fine
+                    d2[prop] = da[prop]
                 else:
                     raise Exception("On property " + str(prop) + ", something is incorrectly specified.")
             # Save a few lines of code by just doing this
-            newHingeDict.pop('rc', None); newHingeDict.pop('tr', None)
+            newHingeDict.pop('rc', None); newHingeDict.pop('tr', None); newHingeDict.pop('tf', None)
         
         if (hingeType == 0):
             # nPaddles is important for remaining hinge properties
@@ -1251,7 +1465,7 @@ class Fiber():
                 newHingeDict['finalTwistBool'] = False
             # Now do the arrayed hinge properties
             nPadMax = np.max(newHingeDict['nPaddles'])
-            for prop in ['Ns', 'angles', 'rps', 'gapLs']:
+            for prop in ['Ns', 'angles', 'tfs', 'rps', 'gapLs']:
                 if (prop in hingeDict.keys()):
                     if isinstance(hingeDict[prop], int | float | np.int32 | np.float64 | np.ndarray):
                         newHingeDict[prop] = hingeDict[prop]
@@ -1259,7 +1473,10 @@ class Fiber():
                         # I add 1 for gapLs in case there's a finalTwistBool = True... the later methods will just discard it if not needed
                         newHingeDict[prop] = _getRandom((N0h, nPadMax + 1*(prop == 'gapLs')), **hingeDict[prop])
                 else:
-                    newHingeDict[prop] = _getRandom((N0h, nPadMax + 1*(prop == 'gapLs')), **_randomDistDefaults[prop])
+                    if isinstance(_randomDistDefaults[prop], dict):
+                        newHingeDict[prop] = _getRandom((N0h, nPadMax + 1*(prop == 'gapLs')), **_randomDistDefaults[prop])
+                    else:
+                        newHingeDict[prop] = np.ones((N0h, nPadMax + 1*(prop == 'gapLs')))*_randomDistDefaults[prop]
             # Finally, do the lengths, ensuring they add up to Ltot including the hinge lengths
             # Have to calculate the hinge lengths first...
             hingeLengthCalcs = {}
@@ -1311,3 +1528,19 @@ class Fiber():
         newSegmentDict['L0'] = newSegmentDict['L0'] - (lengthDiff/N0)
     
         return cls(w0, newSegmentDict, newHingeDict, N0, hingeType = hingeType, hingeStart = hingeStart, hingeEnd = hingeEnd, arbRotStart = arbRotStart, addRotators = addRotators)
+
+    def __str__(self):
+        self._printingBool = True
+        fa, hingeInds, L0 = self.L0
+        hingeTypeStr = "sets of fiber paddles"
+        if (self.hingeType == 1):
+            hingeTypeStr = "arbitrary rotators"
+        info_array = ["Optical fiber of total length {:.4f} m, containing {:.0f} separate fiber objects.".format(L0, len(fa))]
+        if isinstance(self.addRotators, int | float | np.int32 | np.float64):
+            info_array = info_array + ["There are arbitrary rotators, added every {:.4f} m.".format(self.addRotators)]
+        elif isinstance(self.addRotators, dict):
+            info_array = info_array + ["There are arbitrary rotators added at random distances with mean {:.4f} and scale {:.4f}.".format(self.addRotators['mean'], self.addRotators['scale'])]
+        info_array = info_array + ["The hinges, which are " + hingeTypeStr + ", are at the following indices of the object.fibers array.", str(hingeInds)]
+        self._printingBool = False
+        sep = "\n"
+        return sep.join(info_array)
