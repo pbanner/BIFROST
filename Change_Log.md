@@ -1,3 +1,8 @@
+### 1/6/25
+
+*  Added ``getHingeLocations()`` to the ``Fiber`` class to easily access the locations of the hinges in the ``Fiber.fibers`` array.
+*  Fixed a bug in specifying ``Fiber`` objects with zero hinges; when ``hingeType = 1`` was used, properties still had to be set even though they were not used.
+
 ### 12/28/24
 
 *  Discovered and corrected an error in the calculation of the coefficients of thermal expansion, in which the core and cladding CTEs were flipped.

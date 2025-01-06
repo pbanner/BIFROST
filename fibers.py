@@ -1012,6 +1012,7 @@ class Fiber():
 
     Methods:
         calcDGD: Calculate the total DGD of the fiber.
+        getHingeLocations: Returns the indices in self.fibers that are hinges.
 
     Class Methods:
         random: Generate a random optical fiber. See the random()
@@ -1066,6 +1067,8 @@ class Fiber():
                 d['mProps'] = {}
         if (self.hingeType == 0) and ('finalTwistBool' not in self.hingeDict.keys()):
             self.hingeDict['finalTwistBool'] = np.zeros(N0h)
+        if (self.hingeType == 1) and ('alpha' not in self.hingeDict.keys()):
+            self.hingeDict['alpha'] = []
         
         # Now both dicts should have a specific set of keys... check that that's true
         d1 = np.sort(list(self.segmentDict.keys()))
@@ -1139,44 +1142,45 @@ class Fiber():
                 raise Exception("Array in segment dictionary with key " + str(p) + " has the wrong shape, should be 1×{:.0f} but is ".format(self.N0) + str(np.shape(self.segmentDict[p])))
                 
         # Conversions for hinges
-        self.hingeDict.pop('mProps', None)
-        if (self.hingeType == 0):
-            if (isinstance(self.hingeDict['nPaddles'], int | float | np.int32 | np.float64)) or (isinstance(self.hingeDict['nPaddles'], np.ndarray) and (len(self.hingeDict['nPaddles']) == 1)):
-                self.hingeDict['nPaddles'] = np.array([self.hingeDict['nPaddles']]*N0h).flatten()
-            elif (len(self.hingeDict['nPaddles']) != N0h):
-                    raise Exception("Array in hinge dictionary with key nPaddles has the wrong shape, should be 1×{:.0f} but is ".format(N0h) + str(np.shape(self.hingeDict['nPaddles'])))
-            for p in self.hingeDict.keys():
-                if (p not in ['rps', 'angles', 'tfs', 'Ns', 'gapLs']):
-                    if (isinstance(self.hingeDict[p], int | float | np.int32 | np.float64)) or (isinstance(self.hingeDict[p], np.ndarray) and (len(self.hingeDict[p]) == 1)):
-                        self.hingeDict[p] = np.array([self.hingeDict[p]]*N0h).flatten()
-                    elif (len(self.hingeDict[p]) != N0h):
-                        raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape, should be 1×{:.0f} but is ".format(N0h) + str(np.shape(self.hingeDict[p])))
-                else:
-                    if (len(np.shape(self.hingeDict[p])) == 1):
-                        if (len(self.hingeDict[p]) >= np.max(self.hingeDict['nPaddles'])):
-                            self.hingeDict[p] = np.array([list(self.hingeDict[p])]*N0h)
-                        else:
+        if (N0h != 0):
+            self.hingeDict.pop('mProps', None)
+            if (self.hingeType == 0):
+                if (isinstance(self.hingeDict['nPaddles'], int | float | np.int32 | np.float64)) or (isinstance(self.hingeDict['nPaddles'], np.ndarray) and (len(self.hingeDict['nPaddles']) == 1)):
+                    self.hingeDict['nPaddles'] = np.array([self.hingeDict['nPaddles']]*N0h).flatten()
+                elif (len(self.hingeDict['nPaddles']) != N0h):
+                        raise Exception("Array in hinge dictionary with key nPaddles has the wrong shape, should be 1×{:.0f} but is ".format(N0h) + str(np.shape(self.hingeDict['nPaddles'])))
+                for p in self.hingeDict.keys():
+                    if (p not in ['rps', 'angles', 'tfs', 'Ns', 'gapLs']):
+                        if (isinstance(self.hingeDict[p], int | float | np.int32 | np.float64)) or (isinstance(self.hingeDict[p], np.ndarray) and (len(self.hingeDict[p]) == 1)):
+                            self.hingeDict[p] = np.array([self.hingeDict[p]]*N0h).flatten()
+                        elif (len(self.hingeDict[p]) != N0h):
+                            raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape, should be 1×{:.0f} but is ".format(N0h) + str(np.shape(self.hingeDict[p])))
+                    else:
+                        if (len(np.shape(self.hingeDict[p])) == 1):
+                            if (len(self.hingeDict[p]) >= np.max(self.hingeDict['nPaddles'])):
+                                self.hingeDict[p] = np.array([list(self.hingeDict[p])]*N0h)
+                            else:
+                                raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape. It should be 1×(at least {:.0f}) or {:.0f}×(at least {:.0f}) but is ".format(np.max(self.hingeDict['nPaddles']), N0h, np.max(self.hingeDict['nPaddles'])) + str(np.shape(self.hingeDict[p])))
+                        elif (len(np.shape(self.hingeDict[p])) == 2) and (np.shape(self.hingeDict[p])[0] == 1):
+                            if (len(self.hingeDict[p][0]) >= np.max(self.hingeDict['nPaddles'])):
+                                self.hingeDict[p] = np.array([list(self.hingeDict[p][0])]*N0h)
+                            else:
+                                raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape. It should be 1×(at least {:.0f}) or {:.0f}×(at least {:.0f}) but is ".format(np.max(self.hingeDict['nPaddles']), N0h, np.max(self.hingeDict['nPaddles'])) + str(np.shape(self.hingeDict[p])))
+                        elif ((np.shape(self.hingeDict[p])[0] != N0h) or (np.shape(self.hingeDict[p])[1] < np.max(self.hingeDict['nPaddles']))):
                             raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape. It should be 1×(at least {:.0f}) or {:.0f}×(at least {:.0f}) but is ".format(np.max(self.hingeDict['nPaddles']), N0h, np.max(self.hingeDict['nPaddles'])) + str(np.shape(self.hingeDict[p])))
-                    elif (len(np.shape(self.hingeDict[p])) == 2) and (np.shape(self.hingeDict[p])[0] == 1):
-                        if (len(self.hingeDict[p][0]) >= np.max(self.hingeDict['nPaddles'])):
-                            self.hingeDict[p] = np.array([list(self.hingeDict[p][0])]*N0h)
-                        else:
-                            raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape. It should be 1×(at least {:.0f}) or {:.0f}×(at least {:.0f}) but is ".format(np.max(self.hingeDict['nPaddles']), N0h, np.max(self.hingeDict['nPaddles'])) + str(np.shape(self.hingeDict[p])))
-                    elif ((np.shape(self.hingeDict[p])[0] != N0h) or (np.shape(self.hingeDict[p])[1] < np.max(self.hingeDict['nPaddles']))):
-                        raise Exception("Array in hinge dictionary with key " + str(p) + " has the wrong shape. It should be 1×(at least {:.0f}) or {:.0f}×(at least {:.0f}) but is ".format(np.max(self.hingeDict['nPaddles']), N0h, np.max(self.hingeDict['nPaddles'])) + str(np.shape(self.hingeDict[p])))
-        elif (self.hingeType == 1):
-            if (len(np.shape(self.hingeDict['alpha'])) == 1):
-                if (len(self.hingeDict['alpha']) == 4):
-                    self.hingeDict['alpha'] = np.array([list(self.hingeDict['alpha'])]*N0h)
-                else:
+            elif (self.hingeType == 1):
+                if (len(np.shape(self.hingeDict['alpha'])) == 1):
+                    if (len(self.hingeDict['alpha']) == 4):
+                        self.hingeDict['alpha'] = np.array([list(self.hingeDict['alpha'])]*N0h)
+                    else:
+                        raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(np.shape(self.hingeDict['alpha'])))
+                elif (len(np.shape(self.hingeDict['alpha'])) == 2) and (np.shape(self.hingeDict['alpha'])[0] == 1):
+                    if (len(self.hingeDict['alpha'][0]) == 4):
+                        self.hingeDict['alpha'] = np.array([list(self.hingeDict['alpha'][0])]*N0h)
+                    else:
+                        raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(np.shape(self.hingeDict['alpha'])))
+                elif (np.shape(self.hingeDict['alpha']) != (N0h, 4)):
                     raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(np.shape(self.hingeDict['alpha'])))
-            elif (len(np.shape(self.hingeDict['alpha'])) == 2) and (np.shape(self.hingeDict['alpha'])[0] == 1):
-                if (len(self.hingeDict['alpha'][0]) == 4):
-                    self.hingeDict['alpha'] = np.array([list(self.hingeDict['alpha'][0])]*N0h)
-                else:
-                    raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(np.shape(self.hingeDict['alpha'])))
-            elif (np.shape(self.hingeDict['alpha']) != (N0h, 4)):
-                raise Exception("Alpha specs for rotator hinges should be 1×4 or {:.0f}×4, but your spec is".format(N0h) + str(np.shape(self.hingeDict['alpha'])))
         
         # Now make the fiber array.
         # If we aren't putting rotators in the segments, then just interleave the segments
@@ -1362,6 +1366,15 @@ class Fiber():
         # Average and return
         dgd = (dgdM + dgdP)/2
         return dgd
+
+    def getHingeLocations(self):
+        """
+        Returns an array of the indices in self.fibers that are hinges.
+        """
+        self._printingBool = True
+        _, hingeInds = self.fibers
+        self._printingBool = False
+        return hingeInds
 
     @classmethod
     def random(cls, w0, Ltot, N0, segmentDict, hingeDict, hingeType = 0, hingeStart = True, hingeEnd = True, arbRotStart = False, addRotators = None):
