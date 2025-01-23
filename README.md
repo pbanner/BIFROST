@@ -1,6 +1,6 @@
 # Optical Fiber Simulation
 
-This Python library provides a set of measured values, methods, and classes for the simulation of polarization mode dispersion in optical fibers. Silica-based fibers whose core and/or cladding are doped with germanium oxide or with fluorine can be simulated. The underlying physics and relevant context for this project can be found in [these Overleaf notes](https://www.overleaf.com/read/cbrbpthjkprh#af039f), especially Section 8.
+This Python library provides a set of measured values, methods, and classes for the simulation of polarization mode dispersion in optical fibers. Silica-based fibers whose core and/or cladding are doped with germanium oxide or with fluorine can be simulated.
 
 Specifically, the ``fibers.py`` module provides the following classes (see their individual documentations for more details):
 
@@ -11,7 +11,7 @@ Specifically, the ``fibers.py`` module provides the following classes (see their
 
 This repository also includes the example Jupyter notebook for getting started.
 
-The lbirary requires NumPy; you may also find ``py_pol`` and ``plotly`` useful, as detailed below. The last example in the example notebook requires SciPy and MatPlotLib.
+The library requires NumPy; you may also find ``py_pol`` and ``plotly`` useful, as detailed below. The last example in the example notebook requires SciPy and MatPlotLib.
 
 ### Using ``py_pol`` (and Some Caveats)
 
