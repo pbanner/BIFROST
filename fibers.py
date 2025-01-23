@@ -6,9 +6,10 @@ Fiber Simulation Library
 This library provides a set of classes for the simulation of Si-Ge binary glass
 optical fibers.
 
-Patrick Banner
-RbRy Lab, University of Maryland-College Park
-December 27, 2024
+Copyright (C) Patrick Banner 2025
+University of Maryland-College Park
+
+This project is licensed under the GNU GPLv3. See https://www.gnu.org/licenses/ for more information.
 
 ####################################################################################################
 """
