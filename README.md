@@ -20,3 +20,13 @@ To aid in understanding the results of these simulations, I've found it best to 
 I have been especially interested in putting two sets of simulation results on the same Poincaré sphere. As best I can tell this is not supported in ``py_pol``, but there is a quick and dirty fix: install ``plotly`` in your environment, and in the ``drawings.py`` file of your local install of ``py_pol``, in the ``draw_poincare()`` method, set ``add_auxiliar = True`` by default on line 523. Then use code like I show in the examples notebook.
 
 Another annoying caveat: one of the reasons ``py_pol`` is convenient is you can pass multiple objects around at the same time, e.g. ``E1 = J0 * E0`` can represent the several Jones vectors resulting from one Jones vector ``E0`` being multiplied by several Jones matrices ``J0``. However, this fails if there are exactly two Jones matrices in ``J0.`` So be wary of trying to make direct comparisons between two Jones matrices.
+
+### License
+
+Copyright (C) 2025 Patrick Banner.
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
