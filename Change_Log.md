@@ -1,3 +1,8 @@
+### 2/6/25
+
+*  Added the capability to calculate the average transit time through a fiber, with the routines ``_calc_deltaB_CNC()``, ``_calc_deltaB_ATS()``, and ``_calc_deltaB_BND()`` as well as the class methods ``FiberLength.calcPhaseDelay()``, ``FiberPaddleSet.calcPhaseDelay()``, ``Rotator.calcPhaseDelay()``, and ``Fiber.calcPhaseDelay()``.
+*  Added example cells to the Exmaples notebook to reflect the above.
+
 ### 1/6/25
 
 *  Added ``getHingeLocations()`` to the ``Fiber`` class to easily access the locations of the hinges in the ``Fiber.fibers`` array.
