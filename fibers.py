@@ -6,10 +6,9 @@ Fiber Simulation Library
 This library provides a set of classes for the simulation of Si-Ge binary glass
 optical fibers.
 
-Copyright (C) Patrick Banner 2025
-University of Maryland-College Park
-
-This project is licensed under the GNU GPLv3. See https://www.gnu.org/licenses/ for more information.
+Patrick Banner
+RbRy Lab, University of Maryland-College Park
+December 27, 2024
 
 ####################################################################################################
 """
@@ -92,6 +91,18 @@ def _validateFractions(frac):
 
 # Methods for calculating material properties of silica-germania binary glasses
 # -------------------------------------------------------------------------------------------------------------------------------------
+# Many formulas use an eccentricity but I use epsilon, and the conversion
+# unfortunately depends on the value of epsilon. Use signFlag to add a negative
+# sign as appropriate: if +1, this will always return a positive value
+# whose square root is the real eccentricity, but if signFlag=-1, then
+# epsilon < 1 will return -e^2, which can be useful for compact calculations
+# of birefringence.
+def epsilonToEccSq(epsilon, signFlag=1):
+    if (epsilon >= 1):
+        return 1-(1/epsilon**2)
+    else:
+        return signFlag*(1-epsilon**2)
+
 def _calcN_Ge(w0, T0):
     """ Get the refractive index of germania at a given temperature and wavelength. """
     # We have Sellmeier coefficients and a formula for the thermo-optic coefficient
@@ -212,7 +223,7 @@ def _calcYoungModulus(m):
 # Calculate birefringences due to core noncircularity, asymmetric thermal stress,
 # bending, and twisting
 def _calc_B_CNC(epsilon, n0, n1, r0, v):
-    return ((1 - 1/epsilon**2)*(1 - n1**2/n0**2)**(3/2))/(r0) * (4/v**3) * (np.log(v))**3 / (1 + np.log(v))
+    return (epsilonToEccSq(epsilon, signFlag=-1)*(1 - n1**2/n0**2)**(3/2))/(r0) * (4/v**3) * (np.log(v))**3 / (1 + np.log(v))
 def _calc_B_ATS(w0, r0, n0, beta, v, p11, p12, alpha0, alpha1, T0, TS, nu_p, epsilon):
     return (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(p11 - p12)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*((epsilon - 1)/(epsilon + 1)))
 def _calc_B_BND(w0, n0, p11, p12, nu_p, r0, rc, E, tf = 0):
@@ -221,6 +232,21 @@ def _calc_B_BND(w0, n0, p11, p12, nu_p, r0, rc, E, tf = 0):
     return (2*pi/w0)*((n0**3)/2)*(p11-p12)*(1+nu_p)*(0.5*(r0**2/rc**2) + ((2-3*nu_p)/(1-nu_p))*(r0/rc)*(tf/(pi*(r0**2)*E)))
 def _calc_B_TWS(n0, p11, p12, tr):
     return (1+((n0**2)/2)*(p11-p12))*(tr)
+
+def _calc_deltaB_CNC(epsilon, n0, n1, r0, v):
+    dbx = -((1 - n1**2/n0**2)**(3/2))/(r0) * (2*(np.log(v))**2/v**3) * (1 - (np.log(v)/(1+np.log(v)))*epsilonToEccSq(epsilon, signFlag=-1))
+    dby = -((1 - n1**2/n0**2)**(3/2))/(r0) * (2*(np.log(v))**2/v**3) * (1 + (np.log(v)/(1+np.log(v)))*epsilonToEccSq(epsilon, signFlag=-1))
+    return np.array([(dbx+dby)/2, dbx, dby])
+def _calc_deltaB_ATS(w0, r0, n0, beta, v, p11, p12, alpha0, alpha1, T0, TS, nu_p, epsilon):
+    dbx = (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*(1/(r0*(np.sqrt(epsilon) + 1/np.sqrt(epsilon)))))*(p11*r0*np.sqrt(epsilon) + p12*r0/np.sqrt(epsilon))
+    dby = (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*(1/(r0*(np.sqrt(epsilon) + 1/np.sqrt(epsilon)))))*(p12*r0*np.sqrt(epsilon) + p11*r0/np.sqrt(epsilon))
+    return np.array([(dbx+dby)/2, dbx, dby])
+def _calc_deltaB_BND(w0, n0, p11, p12, nu_p, r0, rc, E, tf = 0):
+    if (rc == 0):
+        return np.array([0, 0, 0])
+    dbx = (2*pi/w0)*(n0**3/4)*p11*(1+nu_p)*(r0**2/rc**2)
+    dby = (2*pi/w0)*(n0**3/4)*p12*(1+nu_p)*(r0**2/rc**2)
+    return np.array([(dbx+dby)/2, dbx, dby])
 
 # Calculate Jones matrix given birefringences
 def _calc_J0(beta, B_CNC, B_ATS, B_BND, B_TWS, Lt):
@@ -341,7 +367,7 @@ class FiberLength():
             semimajor and semiminor axes
             Sometimes an eccentricity e is defined as (r_y/r_x)^2 for
             r_y < r_x. epsilon is related as e = sqrt(1 - 1/epsilon^2).
-            Then r_x = r0*(1+e^2/4) and r_y = r0*(1-e^2/4).
+            Then r_x = r0/(1-e^2)^(1/4) and r_y = r0*(1-e^2)^(1/4).
         rc: Bend radius of curvature (m)
         tf: Axial tension force on bends (N)
         tr: Twist rate (rad/m)
@@ -679,6 +705,23 @@ class FiberLength():
         dndw = (dndwP + dndwM)/2
         return nb - wb*(dndw)
 
+    def calcPhaseDelay(self):
+        """
+        Calculates the time (s) for the light to propagate through the fiber.
+        """
+        n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
+        v = _calcV(self.r0, self.w0, n0, n1)
+        beta = _calcBeta(n0, self.w0, self.r0, v)
+        p11, p12 = _calcPhotoelasticConstants(self.m0)
+        alpha0 = _calcCTE(self.m0); alpha1 = _calcCTE(self.m1)
+        TS = _calcTS(self.m0)
+        nu_p = _calcPoissonRatio(self.m0)
+        E = _calcYoungModulus(self.m0)
+        bcnc = _calc_deltaB_CNC(self.epsilon, n0, n1, self.r0, v)
+        bats = _calc_deltaB_ATS(self.w0, self.r0, n0, beta, v, p11, p12, alpha0, alpha1, self.T0, TS, nu_p, self.epsilon)
+        bbnd = _calc_deltaB_BND(self.w0, n0, p11, p12, nu_p, self.r1, self.rc, E, tf = self.tf)
+        return self.Lt/((2*pi*C_c/self.w0)/(np.ones(3)*self.beta + bcnc + bats + bbnd))
+
     def __str__(self):
         info_array = ["Fiber length, properties:",
                       "Length: {:.4f} m".format(self.L0),
@@ -918,6 +961,16 @@ class FiberPaddleSet():
         sep = '\n'
         return sep.join(info_array)
 
+    def calcPhaseDelay(self):
+        """
+        Method for calculating the time for the light to propagate through the fiber.
+        """
+        fa = self.fibers
+        t0 = np.array([0,0,0])
+        for i in range(len(fa)):
+            t0 = t0 + fa[i].calcPhaseDelay()
+        return t0
+
 # Class Rotator() definition
 # -------------------------------------------------------------------------------------------------------------------------------------
 class Rotator():
@@ -954,6 +1007,12 @@ class Rotator():
             alpha: a 4-vector defining the rotation
         """
         self.alpha = alpha/np.linalg.norm(alpha)
+
+    def calcPhaseDelay(self):
+        """
+        This is for compatibility only.
+        """
+        return np.array([0,0,0])
 
     def __str__(self):
         return "Arbitrary rotator over angle {:.4f}° about an axis.".format(self.theta*180/pi)
@@ -1542,6 +1601,16 @@ class Fiber():
         newSegmentDict['L0'] = newSegmentDict['L0'] - (lengthDiff/N0)
     
         return cls(w0, newSegmentDict, newHingeDict, N0, hingeType = hingeType, hingeStart = hingeStart, hingeEnd = hingeEnd, arbRotStart = arbRotStart, addRotators = addRotators)
+
+    def calcPhaseDelay(self):
+        """
+        Method for calculating the time for the light to propagate through the fiber.
+        """
+        fa = self.fibers
+        t0 = np.array([0,0,0])
+        for i in range(len(fa)):
+            t0 = t0 + fa[i].calcPhaseDelay()
+        return t0
 
     def __str__(self):
         self._printingBool = True
