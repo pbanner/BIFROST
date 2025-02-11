@@ -1,4 +1,4 @@
-# BIFROST --- Birefringence In Fiber: Research and Optical Simulation Toolkit
+# BIFROST — Birefringence In Fiber: Research and Optical Simulation Toolkit
 
 BIFROST is a Python library that provides a set of data, methods, and classes for the simulation of polarization mode dispersion in optical fibers. Silica-based fibers whose core and/or cladding are doped with germanium oxide or with fluorine can be simulated.
 
