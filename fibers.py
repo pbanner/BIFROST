@@ -79,13 +79,13 @@ def _validatePositive(val):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateNonnegative(val):
-    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc | numpy.int64):
+    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc | np.int64):
         raise TypeError("Number expected.")
     if not (val >= 0):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateFractions(frac):
-    if not isinstance(frac, float | np.float64 | int | np.int32 | numpy.int64):
+    if not isinstance(frac, float | np.float64 | int | np.int32 | np.int64):
         raise TypeError("Number expected.")
     if not ((0 <= frac) and (frac <= 1)):
         raise ValueError("Fraction should be between 0 and 1. This fraction is {:.3f}.".format(frac))
@@ -368,31 +368,6 @@ class FiberLength():
     assumes a pure silica cladding and a core made of silica doped
     with germania, GeO2.
     """
-
-    @property
-    def m0(self): return self._m0
-    @property
-    def m1(self): return self._m1
-    @property
-    def w0(self): return self._w0
-    @property
-    def r0(self): return self._r0
-    @property
-    def r1(self): return self._r1
-    @property
-    def epsilon(self): return self._epsilon
-    @property
-    def T0(self): return self._T0
-    @property
-    def Tref(self): return self._Tref
-    @property
-    def L0(self): return self._L0
-    @property
-    def rc(self): return self._rc
-    @property
-    def tf(self): return self._tf
-    @property
-    def tr(self): return self._tr
     
     # Derived quantities
     @property
@@ -496,47 +471,9 @@ class FiberLength():
         B_TWS = _calc_B_TWS(n0, p11, p12, self.tr)
         return _calc_J0(beta, B_CNC, B_ATS, B_BND, B_TWS, Lt)
 
-    # Setters for properties
-    @m0.setter
-    def m0(self, value):
-        self._m0 = value
-    @m1.setter
-    def m1(self, value):
-        self._m1 = value
-    @w0.setter
-    def w0(self, value):
-        self._w0 = _validatePositive(value)
-    @r0.setter
-    def r0(self, value):
-        self._r0 = _validatePositive(value)
-    @r1.setter
-    def r1(self, value):
-        self._r1 = _validatePositive(value)
-    @epsilon.setter
-    def epsilon(self, value):
-        self._epsilon = _validateNonnegative(value)
-    @T0.setter
-    def T0(self, value):
-        self._T0 = value
-    @L0.setter
-    def L0(self, value):
-        self._L0 = _validatePositive(value)
-    @Tref.setter
-    def Tref(self, value):
-        self._Tref = value
-    @rc.setter
-    def rc(self, value):
-        self._rc = _validateNonnegative(value)
-    @tf.setter
-    def tf(self, value):
-        self._tf = _validateNonnegative(value)
-    @tr.setter
-    def tr(self, value):
-        self._tr = value
-
     def __init__(self, w0: float, T0: float, L0: float, r0:float, r1:float, epsilon:float, m0:float, 
                  m1:float, Tref:float, rc:float, tf:float, tr:float, 
-                 mProps: typing.Dict[float,float,float,float,float] | None = {}):
+                 mProps = {}) -> None:
         """
         Initialize a new fiber length. 
         
@@ -628,9 +565,9 @@ class FiberLength():
         Jb = self.J0
 
         # Get Jones matrices for ± dw0
-        self.w0 = self._w0 - dw0
+        self.w0 = self.w0 - dw0
         Ja = self.J0
-        self.w0 = self._w0 + 2*dw0
+        self.w0 = self.w0 + 2*dw0
         Jc = self.J0
 
         # Reset values for this object
@@ -683,9 +620,9 @@ class FiberLength():
         nB = self.beta/(2*pi/self.w0)
 
         # Get relevant parameters for ± dw0
-        self.w0 = self._w0 - dw0
+        self.w0 = self.w0 - dw0
         nA = self.beta/(2*pi/self.w0)
-        self.w0 = self._w0 + 2*dw0
+        self.w0 = self.w0 + 2*dw0
         nC = self.beta/(2*pi/self.w0)
 
         # Reset values for this object
@@ -843,9 +780,9 @@ class FiberPaddleSet():
     def finalTwistBool(self): return self._ftb
 
     @property
-    def fibers(self) -> npt.NDArray[npt.Object]:
+    def fibers(self) -> typing.List[FiberLength]:
         # Build the FiberLengths array
-        fa = np.array([], dtype=object)
+        fa = []
         angs = np.concatenate(([0], self.angles))
         for i in range(self.nPaddles):
             # Twist
@@ -855,7 +792,6 @@ class FiberPaddleSet():
         # Final twist
         if (self._ftb):
             fa = np.append(fa, FiberLength(self.w0, self.T0, self.gapLs[-1], self.r0, self.r1, self.epsilon, self.m0, self.m1, self.Tref, 0, 0, (0-angs[-1])/self.gapLs[-1]))
-
         return fa
     @property
     def J0(self):
@@ -935,7 +871,7 @@ class FiberPaddleSet():
             raise Exception("Length of angles array doesn't match nPaddles!")
         if (len(Ns) != nPaddles):
             raise Exception("Length of Ns array doesn't match nPaddles!")
-        [_validatePositive(i) for i in Ns]
+        [_validatePositive(int(i)) for i in Ns]
         if (len(gapLs) != (nPaddles+int(finalTwistBool))):
             raise Exception("Length of gapLs array doesn't match nPaddles + {:.0f}!".format(int(finalTwistBool)))
         [_validatePositive(i) for i in gapLs]
@@ -1155,7 +1091,7 @@ class Fiber():
         return self._addedRotators
 
     @property
-    def fibers(self):
+    def fibers(self) -> typing.List[FiberLength]:
         """The array of FiberLength and FiberPaddleSet objects constituting the fiber"""
         # The actual number of hinges
         N0h = self.N0-1 + int(self.hingeStart) + int(self.hingeEnd)
