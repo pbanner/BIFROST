@@ -15,6 +15,8 @@ December 27, 2024
 
 import numpy as np
 from scipy import optimize as opt
+import numpy.typing as npt
+import typing
 
 # Constants
 # -------------------------------------------------------------------------------------------------------------------------------------
@@ -71,19 +73,19 @@ _YoungModulus = {'SiO2': 74e9, 'GeO2': 45.5e9}
 # between 0 and 1, respectively
 # -------------------------------------------------------------------------------------------------------------------------------------
 def _validatePositive(val):
-    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc):
+    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc | np.int64):
         raise TypeError("Number expected; this is a" + str(type(val)))
     if not (val > 0):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateNonnegative(val):
-    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc):
+    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc | np.int64):
         raise TypeError("Number expected.")
     if not (val >= 0):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateFractions(frac):
-    if not isinstance(frac, float | np.float64 | int | np.int32):
+    if not isinstance(frac, float | np.float64 | int | np.int32 | np.int64):
         raise TypeError("Number expected.")
     if not ((0 <= frac) and (frac <= 1)):
         raise ValueError("Fraction should be between 0 and 1. This fraction is {:.3f}.".format(frac))
@@ -196,52 +198,68 @@ def _calcLt(L0, alpha0, T0, Tref):
     """
     return L0*(1+alpha0*(T0 - Tref))
 
-# Calculate doped coefficient of thermal expansion, softening temperature, 
-# Poisson ratio, and photoelastic constants
 def _calcCTE(m):
+    """calculate coefficient of thermal expansion"""
     if (m <= 0):
         return _CTE['SiO2']
     return (1-m)*_CTE['SiO2'] + m*_CTE['GeO2']
 def _calcTS(m):
+    """calculate softening temperature"""
     if (m <= 0):
         return _SofteningTemperature['SiO2']
     return (1-m)*_SofteningTemperature['SiO2'] + m*_SofteningTemperature['GeO2']
 def _calcPoissonRatio(m):
+    """calculate Poisson ration"""
     if (m <= 0):
         return _PoissonRatio['SiO2']
     return (1-m)*_PoissonRatio['SiO2'] + m*_PoissonRatio['GeO2']
 def _calcPhotoelasticConstants(m):
+    """calculate photoelastic constants"""
     if (m <= 0):
         return _PhotoelasticConstants['SiO2']
     return [(1-m)*_PhotoelasticConstants['SiO2'][0] + m*_PhotoelasticConstants['GeO2'][0],
             (1-m)*_PhotoelasticConstants['SiO2'][1] + m*_PhotoelasticConstants['GeO2'][1]]
 def _calcYoungModulus(m):
+    """calculate Youngs Modulus"""
     if (m <= 0):
         return _YoungModulus['SiO2']
     return (1-m)*_YoungModulus['SiO2'] + m*_YoungModulus['GeO2']
 
-# Calculate birefringences due to core noncircularity, asymmetric thermal stress,
-# bending, and twisting
 def _calc_B_CNC(epsilon, n0, n1, r0, v):
+    """birefringence due to core noncircularity"""
     return (epsilonToEccSq(epsilon, signFlag=-1)*(1 - n1**2/n0**2)**(3/2))/(r0) * (4/v**3) * (np.log(v))**3 / (1 + np.log(v))
 def _calc_B_ATS(w0, r0, n0, beta, v, p11, p12, alpha0, alpha1, T0, TS, nu_p, epsilon):
+    """birefringence due to asymmetric thermal stress"""
     return (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(p11 - p12)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*((epsilon - 1)/(epsilon + 1)))
 def _calc_B_BND(w0, n0, p11, p12, nu_p, r0, rc, E, tf = 0):
+    """birefringence due to bending"""
     if (rc == 0):
         return 0
     return (2*pi/w0)*((n0**3)/2)*(p11-p12)*(1+nu_p)*(0.5*(r0**2/rc**2) + ((2-3*nu_p)/(1-nu_p))*(r0/rc)*(tf/(pi*(r0**2)*E)))
 def _calc_B_TWS(n0, p11, p12, tr):
+    """birefringence due to twisting"""
     return (1+((n0**2)/2)*(p11-p12))*(tr)
 
-def _calc_deltaB_CNC(epsilon, n0, n1, r0, v):
+def _calc_deltaB_CNC(epsilon: float, n0: float, n1: float, r0: float, v:float) -> npt.NDArray[3]:
+    """
+    :return: [avg, min, max] transit time through the fiber 
+    """
     dbx = -((1 - n1**2/n0**2)**(3/2))/(r0) * (2*(np.log(v))**2/v**3) * (1 - (np.log(v)/(1+np.log(v)))*epsilonToEccSq(epsilon, signFlag=-1))
     dby = -((1 - n1**2/n0**2)**(3/2))/(r0) * (2*(np.log(v))**2/v**3) * (1 + (np.log(v)/(1+np.log(v)))*epsilonToEccSq(epsilon, signFlag=-1))
     return np.array([(dbx+dby)/2, dbx, dby])
-def _calc_deltaB_ATS(w0, r0, n0, beta, v, p11, p12, alpha0, alpha1, T0, TS, nu_p, epsilon):
+def _calc_deltaB_ATS(w0: float, r0: float, n0: float, beta: float, v: float, p11:float, 
+        p12: float, alpha0: float, alpha1: float, T0: float, TS: float, nu_p: float, epsilon: float) -> npt.NDArray[3]:
+    """
+    :return: [avg, min, max] transit time through the fiber 
+    """
     dbx = (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*(1/(r0*(np.sqrt(epsilon) + 1/np.sqrt(epsilon)))))*(p11*r0*np.sqrt(epsilon) + p12*r0/np.sqrt(epsilon))
     dby = (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*(1/(r0*(np.sqrt(epsilon) + 1/np.sqrt(epsilon)))))*(p12*r0*np.sqrt(epsilon) + p11*r0/np.sqrt(epsilon))
     return np.array([(dbx+dby)/2, dbx, dby])
-def _calc_deltaB_BND(w0, n0, p11, p12, nu_p, r0, rc, E, tf = 0):
+def _calc_deltaB_BND(w0: float, n0: float, p11: float, p12: float, nu_p: float, r0: float, rc: 
+                     float, E: float, tf: float = 0) -> npt.NDArray[3]:
+    """
+    :return: [avg, min, max] transit time through the fiber 
+    """
     if (rc == 0):
         return np.array([0, 0, 0])
     dbx = (2*pi/w0)*(n0**3/4)*p11*(1+nu_p)*(r0**2/rc**2)
@@ -325,7 +343,7 @@ def _getRandom(n0, mean, scale, dist):
               uniform_int: A uniform distribution of integers only
               normal or Gaussian: A Gaussian distribution
               normal_pos or Gaussian_pos: A Gaussian distribution 
-                  cut off at zero, so as to be only the positive part
+            cut off at zero, so as to be only the positive part
     """
     if (dist == 'uniform'):
         return (np.random.random(size=n0) - 0.5)*(scale*2) + mean
@@ -341,8 +359,7 @@ def _getRandom(n0, mean, scale, dist):
     elif (dist == 'uniform_int'):
         return np.random.randint(int(mean - scale), high=int(mean + scale), size=n0)
 
-# Class FiberLength() definition
-# -------------------------------------------------------------------------------------------------------------------------------------
+
 class FiberLength():
     """
     A single length of fiber.
@@ -350,135 +367,70 @@ class FiberLength():
     This class allows the simulation of Si-Ge binary glasses. It
     assumes a pure silica cladding and a core made of silica doped
     with germania, GeO2.
-
-    Properties (user sets these):
-        w0: Wavelength of light in the fiber (in m)
-        T0: Temperature of the fiber (in °C)
-        L0: Length of the fiber (in m)
-        Tref: Reference temperature at which L0 was measured (in °C)
-        r0: Radius of core (in m)
-        r1: Outer radius of cladding (in m)
-        m0: Molar fraction in core
-        m1: Molar fraction in cladding
-            ***For both m0 and m1, if negative it's a fraction of fluorine;
-            if positive, it's fraction of germania. It's not recommended to
-            try specifying fractions of fluorine above 3-4%.
-        epsilon: Core noncircularity, defined as a/b, where a, b are
-            semimajor and semiminor axes
-            Sometimes an eccentricity e is defined as (r_y/r_x)^2 for
-            r_y < r_x. epsilon is related as e = sqrt(1 - 1/epsilon^2).
-            Then r_x = r0/(1-e^2)^(1/4) and r_y = r0*(1-e^2)^(1/4).
-        rc: Bend radius of curvature (m)
-        tf: Axial tension force on bends (N)
-        tr: Twist rate (rad/m)
-
-    Attributes (derived quantities):
-        n0: Core index of refraction
-        n1: Cladding index of refraction
-        v: Normalized frequency
-        beta: Propagation constant (1/m)
-        alpha0: Coefficient of thermal expansion of the core (1/°C)
-        alpha1: Coefficient of thermal expansion of the cladding (1/°C)
-        Lt: Thermally adjusted length (m)
-        nu_p: Poisson's ratio
-        p11, p12: Photoelastic constants of the core
-        TS: Softening temperature of the core (°C)
-        E: Young's modulus for the core (Pa)
-        B_CNC: Birefringence due to core noncircularity (rad/m)
-        B_ATS: Birefringence due to asymmetric thermal stress (rad/m)
-        B_BND: Birefringence due to bending (rad/m)
-        B_TWS: Birefringence due to twisting (rad/m)
-        J0: Total Jones matrix
-
-    Methods:
-        calcDGD(dw0): Calculate the DGD of the fiber using a small
-            wavelength change dw0 (default 0.1e-9 m or 0.1 nm).
-        calcBeatLength(): Calculates the polarization beat length
-            due to the birefringences of core nincircularity, asymmetric
-            thermal stress, and bending (ignores twisting for now).
-        calcD_CD(dw0): Calculate the chromatic dispersion coefficient
-            D_CD of the fiber using a small wavelength change dw0
-            (default 0.1e-9 m or 0.1 nm).
-        calcNGEff(dw0): Calculate the effective group index of the
-            fiber using a small wavelength change dw0 (default 0.1e-9
-            m or 0.1 nm).
     """
-
-    # Getters for properties
-    # User-set properties
-    @property
-    def m0(self): return self._m0
-    @property
-    def m1(self): return self._m1
-    @property
-    def w0(self): return self._w0
-    @property
-    def r0(self): return self._r0
-    @property
-    def r1(self): return self._r1
-    @property
-    def epsilon(self): return self._epsilon
-    @property
-    def T0(self): return self._T0
-    @property
-    def Tref(self): return self._Tref
-    @property
-    def L0(self): return self._L0
-    @property
-    def rc(self): return self._rc
-    @property
-    def tf(self): return self._tf
-    @property
-    def tr(self): return self._tr
     
     # Derived quantities
     @property
     def n0(self):
+        """Core index of refraction"""
         return _calcNs(self.w0, self.T0, self.m0, self.m1)[0]
     @property
     def n1(self):
+        """Cladding index of refraction"""
         return _calcNs(self.w0, self.T0, self.m0, self.m1)[1]
     @property
     def v(self):
+        """Normalized frequency"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         return _calcV(self.r0, self.w0, n0, n1)
     @property
     def beta(self):
+        """Propagation constant (1/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         return _calcBeta(n0, self.w0, self.r0, v)
     @property
     def alpha0(self):
+        """Coefficient of thermal expansion of the core (1/°C)"""
         return _calcCTE(self.m0)
     @property
     def alpha1(self):
+        """Coefficient of thermal expansion of the cladding (1/°C)"""
         return _calcCTE(self.m1)
     @property
     def Lt(self):
+        """Thermally adjusted length (m)"""
         alpha0 = _calcCTE(self.m0)
         return _calcLt(self.L0, alpha0, self.T0, self.Tref)
     @property
     def nu_p(self):
+        """Poisson's ratio"""
         return _calcPoissonRatio(self.m0)
     @property
     def p11(self):
+        """p11, p12: Photoelastic constants of the core"""
         return _calcPhotoelasticConstants(self.m0)[0]
     @property
     def p12(self):
+        """p11, p12: Photoelastic constants of the core"""
         return _calcPhotoelasticConstants(self.m0)[1]
     @property
     def TS(self):
+        """Softening temperature of the core (°C)"""
         return _calcTS(self.m0)
     @property
     def E(self):
+        """Young's modulus for the core (Pa)"""
         return _calcYoungModulus(self.m0)
     @property
     def B_CNC(self):
+        """Birefringence due to core noncircularity (rad/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         return _calc_B_CNC(self.epsilon, n0, n1, self.r0, v)
     @property
     def B_ATS(self):
+        """Birefringence due to asymmetric thermal stress (rad/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         beta = _calcBeta(n0, self.w0, self.r0, v)
@@ -489,6 +441,7 @@ class FiberLength():
         return _calc_B_ATS(self.w0, self.r0, n0, beta, v, p11, p12, alpha0, alpha1, self.T0, TS, nu_p, self.epsilon)
     @property
     def B_BND(self):
+        """Birefringence due to bending (rad/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         p11, p12 = _calcPhotoelasticConstants(self.m0)
         nu_p = _calcPoissonRatio(self.m0)
@@ -496,11 +449,13 @@ class FiberLength():
         return _calc_B_BND(self.w0, n0, p11, p12, nu_p, self.r1, self.rc, E, tf = self.tf)
     @property
     def B_TWS(self):
+        """Birefringence due to twisting (rad/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         p11, p12 = _calcPhotoelasticConstants(self.m0)
         return _calc_B_TWS(n0, p11, p12, self.tr)
     @property
     def J0(self):
+        """Total Jones matrix"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         beta = _calcBeta(n0, self.w0, self.r0, v)
@@ -516,66 +471,47 @@ class FiberLength():
         B_TWS = _calc_B_TWS(n0, p11, p12, self.tr)
         return _calc_J0(beta, B_CNC, B_ATS, B_BND, B_TWS, Lt)
 
-    # Setters for properties
-    @m0.setter
-    def m0(self, value):
-        self._m0 = value
-    @m1.setter
-    def m1(self, value):
-        self._m1 = value
-    @w0.setter
-    def w0(self, value):
-        self._w0 = _validatePositive(value)
-    @r0.setter
-    def r0(self, value):
-        self._r0 = _validatePositive(value)
-    @r1.setter
-    def r1(self, value):
-        self._r1 = _validatePositive(value)
-    @epsilon.setter
-    def epsilon(self, value):
-        self._epsilon = _validateNonnegative(value)
-    @T0.setter
-    def T0(self, value):
-        self._T0 = value
-    @L0.setter
-    def L0(self, value):
-        self._L0 = _validatePositive(value)
-    @Tref.setter
-    def Tref(self, value):
-        self._Tref = value
-    @rc.setter
-    def rc(self, value):
-        self._rc = _validateNonnegative(value)
-    @tf.setter
-    def tf(self, value):
-        self._tf = _validateNonnegative(value)
-    @tr.setter
-    def tr(self, value):
-        self._tr = value
-
-    # Initialization
-    # Units: w0 (m), T0 (°C), L0 (m), r0,r1 (m), epsilon (unitless), m0,m1 (unitless), Tref (°C), rc (m), tf (N), tr(rad/m)
-    # Note on rc: if set to zero, treated as infinity
-    def __init__(self, w0, T0, L0, r0, r1, epsilon, m0, m1, Tref, rc, tf, tr, mProps = {}):
+    def __init__(self, w0: float, T0: float, L0: float, r0:float, r1:float, epsilon:float, m0:float, 
+                 m1:float, Tref:float, rc:float, tf:float, tr:float, 
+                 mProps = {}) -> None:
         """
         Initialize a new fiber length. 
         
-        Parameters:
-            w0: wavelength (m)
-            T0: temperature (°C)
-            L0: length measured at Tref (m)
-            r0: radius of core (m)
-            r1: outer radius of cladding (m)
-            epsilon: core noncircularity, ratio of larger axis to smaller one
-                (see class documentation for more details)
-            m0, m1: molar fractions of fluorine (if negative) or germania (if positive)
-                of the core, cladding (may be overriden by mProps, see below)
-            Tref: temperature for length reference (°C)
-            rc: bending radius of curvature (m)
-            tf: axial tension force on bends (N)
-            tr: twist rate (rad/m)
-            mProps (optional): a dictionary with alternate specifications of the
+        Parameters
+        ----------
+        w0: float
+            wavelength (m)
+        T0: float
+            temperature (°C)
+        L0: float
+            length measured at Tref (m)
+        r0: float
+            radius of core (m)
+        r1: float 
+            outer radius of cladding (m)
+        epsilon: float
+            core noncircularity (unitless)
+            Defined as a/b, where a, b are the semimajor and semiminor axes.
+            Sometimes an eccentricity e is defined as (r_y/r_x)^2 for
+            r_y < r_x. epsilon is related as e = sqrt(1 - 1/epsilon^2).
+            Then r_x = r0/(1-e^2)^(1/4) and r_y = r0*(1-e^2)^(1/4).
+        m0: float
+            core molar fraction of fluorine (if negative) or germania (if positive) (unitless)
+            (may be overriden by mProps)
+        m1: float
+            cladding molar fraction of fluorine (if negative) or germania (if positive) (unitless)
+            (may be overriden by mProps)
+        Tref: float
+            temperature for length reference (°C)
+        rc: float
+            bending radius of curvature (m)
+            if set to zero, treated as infinity
+        tf: float 
+            axial tension force on bends (N)
+        tr: float
+            twist rate (rad/m)
+        mProps: dict
+                A dictionary with alternate specifications of the
                 doping concentrations of the fiber; if {}, then m0,m1 will be used;
                 if not {}, this will override m0, m1, and keys must include one of
                 n0, n1, m0, m1, neff specifying the refractive index of the core
@@ -583,8 +519,8 @@ class FiberLength():
                 or effective refractive index of the mode; keys must also include
                 ALL of dn, T, and w0, the fractional difference in refractive
                 indices (n0-n1)/n1 between core and cladding, and the temperature
-                (°C) and wavelength (m) at which n0/n1/m0/m1/neff and dn are
-                specified. Default {}.
+                (°C) and wavelength (m) at which n0, n1, m0, m1, neff and dn are
+                specified. (optional)
         """
         self.w0 = w0
         self.T0 = T0; self.L0 = L0
@@ -605,17 +541,22 @@ class FiberLength():
                     self.m0 = a; self.m1 = b
         self.Tref = Tref
         self.rc = rc; self.tf = tf; self.tr = tr
-    
-    def calcDGD(self, dw0 = 0.1e-9):
-        """
-        Calculates the DGD of the fiber length by varying the wavelength
-        in both directions and calculating the Jones matrix.
 
-        Parameters:
-            dw0 (optional): the small wavelength step to take (m), default 0.1e-9
-
-        Outputs: dgd, the DGD in s
+    def calcDGD(self, dw0 = 0.1e-9) -> float:
         """
+        Calculates the DGD of the fiber length using a small wavelength change.
+
+        Parameters
+        ----------
+        dw0 : float
+            the small wavelength step to take (m), (optional) 
+
+        Returns
+        -------
+        dgd : float
+            DGD in s
+        """
+
         # Uses the Jones matrix to get the DGD of the fiber
         # dw0 is the small amount by which to change the wavelength, in m
 
@@ -624,9 +565,9 @@ class FiberLength():
         Jb = self.J0
 
         # Get Jones matrices for ± dw0
-        self.w0 = self._w0 - dw0
+        self.w0 = self.w0 - dw0
         Ja = self.J0
-        self.w0 = self._w0 + 2*dw0
+        self.w0 = self.w0 + 2*dw0
         Jc = self.J0
 
         # Reset values for this object
@@ -647,30 +588,41 @@ class FiberLength():
 
     def calcBeatLength(self):
         """
-        Returns the polarization beat length of the fiber (m).
+        Polarization beat length of the fiber. 
+        
         Ignores twisting; only accounts for core nincircularity, asymmetric
         thermal stress, and bending birefringences.
+
+        Returns
+        -------
+        float
+            polarization beat length (m)
         """
         return np.abs(2*pi/(self.B_CNC + self.B_ATS + self.B_BND + self.B_TWS))
 
-    def calcD_CD(self, dw0 = 0.1e-9):
+    def calcD_CD(self, dw0 = 0.1e-9) -> float:
         """
-        Method for calculating the chromatic dispersion of the fiber length.
-        Returns the effective D_CD from the propagation constant of the fiber
+        Chromatic dispersion of the fiber length from the propagation constant of the fiber
         mode.
-        Parameters:
-            dw0 (optional): the small wavelength step to take (m), default 0.1e-9
 
-        Outputs: the D_CD in ps/(nm.km)
+        Parameters
+        ----------
+        dw0 : float 
+            the small wavelength step to take (m) (optional)
+
+        Returns
+        -------
+        float
+            chromatic dispersion in ps/(nm*km)
         """
         # Store current variables
         wb = self.w0
         nB = self.beta/(2*pi/self.w0)
 
         # Get relevant parameters for ± dw0
-        self.w0 = self._w0 - dw0
+        self.w0 = self.w0 - dw0
         nA = self.beta/(2*pi/self.w0)
-        self.w0 = self._w0 + 2*dw0
+        self.w0 = self.w0 + 2*dw0
         nC = self.beta/(2*pi/self.w0)
 
         # Reset values for this object
@@ -679,15 +631,21 @@ class FiberLength():
         dcd = -self.w0/C_c*(nC - 2*nB + nA)/dw0**2*1e12*1e-9*1e3
         return dcd
 
-    def calcNGEff(self, dw0 = 0.1e-9):
+    def calcNGEff(self, dw0 = 0.1e-9) -> float:
         """
-        Method for calculating the effective group index of the fiber,
-        c/v_g = n(lambda) - lambda*dn/d-lambda.
-        
-        Parameters:
-            dw0 (optional): the small wavelength step to take (m), default 0.1e-9
+        Calculate the effective group index of the fiber.
 
-        Outputs: the effective group index
+        .. math:: c/v_g = n(lambda) - lambda*dn/d-lambda.
+        
+        Parameters
+        ----------
+        float
+            the small wavelength step to take (m) (optional)
+
+        Returns
+        -------
+        float
+            effective group index
         """
         # Store current variables
         wb = self.w0
@@ -705,9 +663,14 @@ class FiberLength():
         dndw = (dndwP + dndwM)/2
         return nb - wb*(dndw)
 
-    def calcPhaseDelay(self):
+    def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
-        Calculates the time (s) for the light to propagate through the fiber.
+        Calculates the time for light to propagate through the fiber.
+    
+        Returns
+        -------
+        [avg,min,max]
+            average, min, max transit time through the fiber (s)
         """
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
@@ -817,9 +780,9 @@ class FiberPaddleSet():
     def finalTwistBool(self): return self._ftb
 
     @property
-    def fibers(self):
+    def fibers(self) -> typing.List[FiberLength]:
         # Build the FiberLengths array
-        fa = np.array([], dtype=object)
+        fa = []
         angs = np.concatenate(([0], self.angles))
         for i in range(self.nPaddles):
             # Twist
@@ -829,7 +792,6 @@ class FiberPaddleSet():
         # Final twist
         if (self._ftb):
             fa = np.append(fa, FiberLength(self.w0, self.T0, self.gapLs[-1], self.r0, self.r1, self.epsilon, self.m0, self.m1, self.Tref, 0, 0, (0-angs[-1])/self.gapLs[-1]))
-
         return fa
     @property
     def J0(self):
@@ -909,7 +871,7 @@ class FiberPaddleSet():
             raise Exception("Length of angles array doesn't match nPaddles!")
         if (len(Ns) != nPaddles):
             raise Exception("Length of Ns array doesn't match nPaddles!")
-        [_validatePositive(i) for i in Ns]
+        [_validatePositive(int(i)) for i in Ns]
         if (len(gapLs) != (nPaddles+int(finalTwistBool))):
             raise Exception("Length of gapLs array doesn't match nPaddles + {:.0f}!".format(int(finalTwistBool)))
         [_validatePositive(i) for i in gapLs]
@@ -961,9 +923,10 @@ class FiberPaddleSet():
         sep = '\n'
         return sep.join(info_array)
 
-    def calcPhaseDelay(self):
+    def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
-        Method for calculating the time for the light to propagate through the fiber.
+        Method for calculating the time for the light to propagate through the fiber paddle set.
+        :return: [avg, min, max] transit time through the fiber
         """
         fa = self.fibers
         t0 = np.array([0,0,0])
@@ -1008,9 +971,10 @@ class Rotator():
         """
         self.alpha = alpha/np.linalg.norm(alpha)
 
-    def calcPhaseDelay(self):
+    def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
         This is for compatibility only.
+        :return: [avg, min, max] transit time through the fiber
         """
         return np.array([0,0,0])
 
@@ -1083,24 +1047,37 @@ class Fiber():
     hingeDictKeys = np.array(['Ns', 'T0', 'Tref', 'angles', 'epsilon', 'finalTwistBool', 'gapLs', 'm0', 'm1', 'mProps', 'nPaddles', 'r0', 'r1', 'rps', 'tfs'])
     
     @property
-    def w0(self): return self._w0
+    def w0(self): 
+        """Wavelength of light (m)"""
+        return self._w0
     @w0.setter
     def w0(self, value):
+        """Wavelength of light (m)"""
         self._w0 = _validatePositive(value)
         
     @property
-    def N0(self): return self._N0
+    def N0(self): 
+        """Number of long segments"""
+        return self._N0
     @N0.setter
     def N0(self, value):
+        """Number of long segments"""
         self._N0 = _validatePositive(value)
 
     @property
-    def arbRotStart(self): return self._arbRotStart
+    def arbRotStart(self): 
+        """Boolean, whether to start the fiber with an arbitrary rotation (sometimes useful in simulatory applications)"""
+        return self._arbRotStart
     @arbRotStart.setter
     def arbRotStart(self, newVal):
+        """Boolean, whether to start the fiber with an arbitrary
+            rotation (sometimes useful in simulatory applications)"""
         self.toggleStartRotator(newVal)
     @property
-    def startRotator(self): return self._startRotator
+    def startRotator(self): 
+        """The Rotator at the start of the fiber 
+        (always a Rotator object, but its Jones matrix is the identity if arbRotStart is False)"""
+        return self._startRotator
 
     @property
     def addRotators(self): return self._addRotators
@@ -1108,10 +1085,14 @@ class Fiber():
     def addRotators(self, newVal):
         self.toggleAddedRotators(newVal)
     @property
-    def addedRotators(self): return self._addedRotators
+    def addedRotators(self): 
+        """A dictionary of rotator parameters and fiber lengths for the
+            arbitrary rotators along the long fiber segments, when addRotators is not None"""
+        return self._addedRotators
 
     @property
-    def fibers(self):
+    def fibers(self) -> typing.List[FiberLength]:
+        """The array of FiberLength and FiberPaddleSet objects constituting the fiber"""
         # The actual number of hinges
         N0h = self.N0-1 + int(self.hingeStart) + int(self.hingeEnd)
         # Take some compliance measures on the dictionaries
@@ -1291,6 +1272,7 @@ class Fiber():
         
     @property
     def J0(self):
+        """The total Jones matrix of the fiber"""
         fa = self.fibers
         Jtot = np.array([[1,0],[0,1]])
         for i in range(len(fa)):
@@ -1298,6 +1280,7 @@ class Fiber():
         return Jtot
     @property
     def L0(self):
+        """The total length of the fiber"""
         fa = 0; hingeInds = 0
         if (self._printingBool):
             fa, hingeInds = self.fibers
@@ -1602,9 +1585,10 @@ class Fiber():
     
         return cls(w0, newSegmentDict, newHingeDict, N0, hingeType = hingeType, hingeStart = hingeStart, hingeEnd = hingeEnd, arbRotStart = arbRotStart, addRotators = addRotators)
 
-    def calcPhaseDelay(self):
+    def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
         Method for calculating the time for the light to propagate through the fiber.
+        :return: [avg, min, max] transit time through the fiber
         """
         fa = self.fibers
         t0 = np.array([0,0,0])
