@@ -407,7 +407,11 @@ class FiberLength():
     # Getters for properties
     # User-set properties
     @property
-    def m0(self): return self._m0
+    def m0(self): 
+        """
+        m0: Molar fraction in core
+        """
+        return self._m0
     @property
     def m1(self): return self._m1
     @property
@@ -434,51 +438,65 @@ class FiberLength():
     # Derived quantities
     @property
     def n0(self):
+        """Core index of refraction"""
         return _calcNs(self.w0, self.T0, self.m0, self.m1)[0]
     @property
     def n1(self):
+        """Cladding index of refraction"""
         return _calcNs(self.w0, self.T0, self.m0, self.m1)[1]
     @property
     def v(self):
+        """Normalized frequency"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         return _calcV(self.r0, self.w0, n0, n1)
     @property
     def beta(self):
+        """Propagation constant (1/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         return _calcBeta(n0, self.w0, self.r0, v)
     @property
     def alpha0(self):
+        """Coefficient of thermal expansion of the core (1/°C)"""
         return _calcCTE(self.m0)
     @property
     def alpha1(self):
+        """Coefficient of thermal expansion of the cladding (1/°C)"""
         return _calcCTE(self.m1)
     @property
     def Lt(self):
+        """Thermally adjusted length (m)"""
         alpha0 = _calcCTE(self.m0)
         return _calcLt(self.L0, alpha0, self.T0, self.Tref)
     @property
     def nu_p(self):
+        """Poisson's ratio"""
         return _calcPoissonRatio(self.m0)
     @property
     def p11(self):
+        """p11, p12: Photoelastic constants of the core"""
         return _calcPhotoelasticConstants(self.m0)[0]
     @property
     def p12(self):
+        """p11, p12: Photoelastic constants of the core"""
         return _calcPhotoelasticConstants(self.m0)[1]
     @property
     def TS(self):
+        """Softening temperature of the core (°C)"""
         return _calcTS(self.m0)
     @property
     def E(self):
+        """Young's modulus for the core (Pa)"""
         return _calcYoungModulus(self.m0)
     @property
     def B_CNC(self):
+        """Birefringence due to core noncircularity (rad/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         return _calc_B_CNC(self.epsilon, n0, n1, self.r0, v)
     @property
     def B_ATS(self):
+        """Birefringence due to asymmetric thermal stress (rad/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         beta = _calcBeta(n0, self.w0, self.r0, v)
@@ -489,6 +507,7 @@ class FiberLength():
         return _calc_B_ATS(self.w0, self.r0, n0, beta, v, p11, p12, alpha0, alpha1, self.T0, TS, nu_p, self.epsilon)
     @property
     def B_BND(self):
+        """Birefringence due to bending (rad/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         p11, p12 = _calcPhotoelasticConstants(self.m0)
         nu_p = _calcPoissonRatio(self.m0)
@@ -496,11 +515,13 @@ class FiberLength():
         return _calc_B_BND(self.w0, n0, p11, p12, nu_p, self.r1, self.rc, E, tf = self.tf)
     @property
     def B_TWS(self):
+        """Birefringence due to twisting (rad/m)"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         p11, p12 = _calcPhotoelasticConstants(self.m0)
         return _calc_B_TWS(n0, p11, p12, self.tr)
     @property
     def J0(self):
+        """Total Jones matrix"""
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
         beta = _calcBeta(n0, self.w0, self.r0, v)
