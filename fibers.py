@@ -16,6 +16,7 @@ December 27, 2024
 import numpy as np
 from scipy import optimize as opt
 import numpy.typing as npt
+import typing
 
 # Constants
 # -------------------------------------------------------------------------------------------------------------------------------------
@@ -342,7 +343,7 @@ def _getRandom(n0, mean, scale, dist):
               uniform_int: A uniform distribution of integers only
               normal or Gaussian: A Gaussian distribution
               normal_pos or Gaussian_pos: A Gaussian distribution 
-                  cut off at zero, so as to be only the positive part
+            cut off at zero, so as to be only the positive part
     """
     if (dist == 'uniform'):
         return (np.random.random(size=n0) - 0.5)*(scale*2) + mean
@@ -358,8 +359,7 @@ def _getRandom(n0, mean, scale, dist):
     elif (dist == 'uniform_int'):
         return np.random.randint(int(mean - scale), high=int(mean + scale), size=n0)
 
-# Class FiberLength() definition
-# -------------------------------------------------------------------------------------------------------------------------------------
+
 class FiberLength():
     """
     A single length of fiber.
@@ -367,68 +367,10 @@ class FiberLength():
     This class allows the simulation of Si-Ge binary glasses. It
     assumes a pure silica cladding and a core made of silica doped
     with germania, GeO2.
-
-    Properties (user sets these):
-        w0: Wavelength of light in the fiber (in m)
-        T0: Temperature of the fiber (in °C)
-        L0: Length of the fiber (in m)
-        Tref: Reference temperature at which L0 was measured (in °C)
-        r0: Radius of core (in m)
-        r1: Outer radius of cladding (in m)
-        m0: Molar fraction in core
-        m1: Molar fraction in cladding
-            ***For both m0 and m1, if negative it's a fraction of fluorine;
-            if positive, it's fraction of germania. It's not recommended to
-            try specifying fractions of fluorine above 3-4%.
-        epsilon: Core noncircularity, defined as a/b, where a, b are
-            semimajor and semiminor axes
-            Sometimes an eccentricity e is defined as (r_y/r_x)^2 for
-            r_y < r_x. epsilon is related as e = sqrt(1 - 1/epsilon^2).
-            Then r_x = r0/(1-e^2)^(1/4) and r_y = r0*(1-e^2)^(1/4).
-        rc: Bend radius of curvature (m)
-        tf: Axial tension force on bends (N)
-        tr: Twist rate (rad/m)
-
-    Attributes (derived quantities):
-        n0: Core index of refraction
-        n1: Cladding index of refraction
-        v: Normalized frequency
-        beta: Propagation constant (1/m)
-        alpha0: Coefficient of thermal expansion of the core (1/°C)
-        alpha1: Coefficient of thermal expansion of the cladding (1/°C)
-        Lt: Thermally adjusted length (m)
-        nu_p: Poisson's ratio
-        p11, p12: Photoelastic constants of the core
-        TS: Softening temperature of the core (°C)
-        E: Young's modulus for the core (Pa)
-        B_CNC: Birefringence due to core noncircularity (rad/m)
-        B_ATS: Birefringence due to asymmetric thermal stress (rad/m)
-        B_BND: Birefringence due to bending (rad/m)
-        B_TWS: Birefringence due to twisting (rad/m)
-        J0: Total Jones matrix
-
-    Methods:
-        calcDGD(dw0): Calculate the DGD of the fiber using a small
-            wavelength change dw0 (default 0.1e-9 m or 0.1 nm).
-        calcBeatLength(): Calculates the polarization beat length
-            due to the birefringences of core nincircularity, asymmetric
-            thermal stress, and bending (ignores twisting for now).
-        calcD_CD(dw0): Calculate the chromatic dispersion coefficient
-            D_CD of the fiber using a small wavelength change dw0
-            (default 0.1e-9 m or 0.1 nm).
-        calcNGEff(dw0): Calculate the effective group index of the
-            fiber using a small wavelength change dw0 (default 0.1e-9
-            m or 0.1 nm).
     """
 
-    # Getters for properties
-    # User-set properties
     @property
-    def m0(self): 
-        """
-        m0: Molar fraction in core
-        """
-        return self._m0
+    def m0(self): return self._m0
     @property
     def m1(self): return self._m1
     @property
@@ -592,28 +534,47 @@ class FiberLength():
     def tr(self, value):
         self._tr = value
 
-    # Initialization
-    # Units: w0 (m), T0 (°C), L0 (m), r0,r1 (m), epsilon (unitless), m0,m1 (unitless), Tref (°C), rc (m), tf (N), tr(rad/m)
-    # Note on rc: if set to zero, treated as infinity
-    def __init__(self, w0, T0, L0, r0, r1, epsilon, m0, m1, Tref, rc, tf, tr, mProps = {}):
+    def __init__(self, w0: float, T0: float, L0: float, r0:float, r1:float, epsilon:float, m0:float, 
+                 m1:float, Tref:float, rc:float, tf:float, tr:float, 
+                 mProps: typing.Dict[float,float,float,float,float] | None = {}):
         """
         Initialize a new fiber length. 
         
-        Parameters:
-            w0: wavelength (m)
-            T0: temperature (°C)
-            L0: length measured at Tref (m)
-            r0: radius of core (m)
-            r1: outer radius of cladding (m)
-            epsilon: core noncircularity, ratio of larger axis to smaller one
-                (see class documentation for more details)
-            m0, m1: molar fractions of fluorine (if negative) or germania (if positive)
-                of the core, cladding (may be overriden by mProps, see below)
-            Tref: temperature for length reference (°C)
-            rc: bending radius of curvature (m)
-            tf: axial tension force on bends (N)
-            tr: twist rate (rad/m)
-            mProps (optional): a dictionary with alternate specifications of the
+        Parameters
+        ----------
+        w0: float
+            wavelength (m)
+        T0: float
+            temperature (°C)
+        L0: float
+            length measured at Tref (m)
+        r0: float
+            radius of core (m)
+        r1: float 
+            outer radius of cladding (m)
+        epsilon: float
+            core noncircularity (unitless)
+            Defined as a/b, where a, b are the semimajor and semiminor axes.
+            Sometimes an eccentricity e is defined as (r_y/r_x)^2 for
+            r_y < r_x. epsilon is related as e = sqrt(1 - 1/epsilon^2).
+            Then r_x = r0/(1-e^2)^(1/4) and r_y = r0*(1-e^2)^(1/4).
+        m0: float
+            core molar fraction of fluorine (if negative) or germania (if positive) (unitless)
+            (may be overriden by mProps)
+        m1: float
+            cladding molar fraction of fluorine (if negative) or germania (if positive) (unitless)
+            (may be overriden by mProps)
+        Tref: float
+            temperature for length reference (°C)
+        rc: float
+            bending radius of curvature (m)
+            if set to zero, treated as infinity
+        tf: float 
+            axial tension force on bends (N)
+        tr: float
+            twist rate (rad/m)
+        mProps: dict
+                A dictionary with alternate specifications of the
                 doping concentrations of the fiber; if {}, then m0,m1 will be used;
                 if not {}, this will override m0, m1, and keys must include one of
                 n0, n1, m0, m1, neff specifying the refractive index of the core
@@ -621,8 +582,8 @@ class FiberLength():
                 or effective refractive index of the mode; keys must also include
                 ALL of dn, T, and w0, the fractional difference in refractive
                 indices (n0-n1)/n1 between core and cladding, and the temperature
-                (°C) and wavelength (m) at which n0/n1/m0/m1/neff and dn are
-                specified. Default {}.
+                (°C) and wavelength (m) at which n0, n1, m0, m1, neff and dn are
+                specified. (optional)
         """
         self.w0 = w0
         self.T0 = T0; self.L0 = L0
@@ -643,17 +604,22 @@ class FiberLength():
                     self.m0 = a; self.m1 = b
         self.Tref = Tref
         self.rc = rc; self.tf = tf; self.tr = tr
-    
-    def calcDGD(self, dw0 = 0.1e-9):
-        """
-        Calculates the DGD of the fiber length by varying the wavelength
-        in both directions and calculating the Jones matrix.
 
-        Parameters:
-            dw0 (optional): the small wavelength step to take (m), default 0.1e-9
-
-        Outputs: dgd, the DGD in s
+    def calcDGD(self, dw0 = 0.1e-9) -> float:
         """
+        Calculates the DGD of the fiber length using a small wavelength change.
+
+        Parameters
+        ----------
+        dw0 : float
+            the small wavelength step to take (m), (optional) 
+
+        Returns
+        -------
+        dgd : float
+            DGD in s
+        """
+
         # Uses the Jones matrix to get the DGD of the fiber
         # dw0 is the small amount by which to change the wavelength, in m
 
@@ -685,21 +651,32 @@ class FiberLength():
 
     def calcBeatLength(self):
         """
-        Returns the polarization beat length of the fiber (m).
+        Polarization beat length of the fiber. 
+        
         Ignores twisting; only accounts for core nincircularity, asymmetric
         thermal stress, and bending birefringences.
+
+        Returns
+        -------
+        float
+            polarization beat length (m)
         """
         return np.abs(2*pi/(self.B_CNC + self.B_ATS + self.B_BND + self.B_TWS))
 
-    def calcD_CD(self, dw0 = 0.1e-9):
+    def calcD_CD(self, dw0 = 0.1e-9) -> float:
         """
-        Method for calculating the chromatic dispersion of the fiber length.
-        Returns the effective D_CD from the propagation constant of the fiber
+        Chromatic dispersion of the fiber length from the propagation constant of the fiber
         mode.
-        Parameters:
-            dw0 (optional): the small wavelength step to take (m), default 0.1e-9
 
-        Outputs: the D_CD in ps/(nm.km)
+        Parameters
+        ----------
+        dw0 : float 
+            the small wavelength step to take (m) (optional)
+
+        Returns
+        -------
+        float
+            chromatic dispersion in ps/(nm*km)
         """
         # Store current variables
         wb = self.w0
@@ -717,15 +694,21 @@ class FiberLength():
         dcd = -self.w0/C_c*(nC - 2*nB + nA)/dw0**2*1e12*1e-9*1e3
         return dcd
 
-    def calcNGEff(self, dw0 = 0.1e-9):
+    def calcNGEff(self, dw0 = 0.1e-9) -> float:
         """
-        Method for calculating the effective group index of the fiber,
-        c/v_g = n(lambda) - lambda*dn/d-lambda.
-        
-        Parameters:
-            dw0 (optional): the small wavelength step to take (m), default 0.1e-9
+        Calculate the effective group index of the fiber.
 
-        Outputs: the effective group index
+        .. math:: c/v_g = n(lambda) - lambda*dn/d-lambda.
+        
+        Parameters
+        ----------
+        float
+            the small wavelength step to take (m) (optional)
+
+        Returns
+        -------
+        float
+            effective group index
         """
         # Store current variables
         wb = self.w0
@@ -745,8 +728,12 @@ class FiberLength():
 
     def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
-        Calculates the time (s) for the light to propagate through the fiber.
-        :return: [avg, min, max] transit time through the fiber 
+        Calculates the time for light to propagate through the fiber.
+    
+        Returns
+        -------
+        [avg,min,max]
+            average, min, max transit time through the fiber (s)
         """
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
