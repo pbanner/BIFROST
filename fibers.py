@@ -73,19 +73,19 @@ _YoungModulus = {'SiO2': 74e9, 'GeO2': 45.5e9}
 # between 0 and 1, respectively
 # -------------------------------------------------------------------------------------------------------------------------------------
 def _validatePositive(val):
-    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc):
+    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc | np.int64):
         raise TypeError("Number expected; this is a" + str(type(val)))
     if not (val > 0):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateNonnegative(val):
-    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc):
+    if not isinstance(val, int | float | np.int32 | np.float64 | np.intc | numpy.int64):
         raise TypeError("Number expected.")
     if not (val >= 0):
         raise ValueError("Value should be greater than zero.")
     return val
 def _validateFractions(frac):
-    if not isinstance(frac, float | np.float64 | int | np.int32):
+    if not isinstance(frac, float | np.float64 | int | np.int32 | numpy.int64):
         raise TypeError("Number expected.")
     if not ((0 <= frac) and (frac <= 1)):
         raise ValueError("Fraction should be between 0 and 1. This fraction is {:.3f}.".format(frac))
