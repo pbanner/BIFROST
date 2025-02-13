@@ -15,6 +15,7 @@ December 27, 2024
 
 import numpy as np
 from scipy import optimize as opt
+import numpy.typing as npt
 
 # Constants
 # -------------------------------------------------------------------------------------------------------------------------------------
@@ -196,52 +197,68 @@ def _calcLt(L0, alpha0, T0, Tref):
     """
     return L0*(1+alpha0*(T0 - Tref))
 
-# Calculate doped coefficient of thermal expansion, softening temperature, 
-# Poisson ratio, and photoelastic constants
 def _calcCTE(m):
+    """calculate coefficient of thermal expansion"""
     if (m <= 0):
         return _CTE['SiO2']
     return (1-m)*_CTE['SiO2'] + m*_CTE['GeO2']
 def _calcTS(m):
+    """calculate softening temperature"""
     if (m <= 0):
         return _SofteningTemperature['SiO2']
     return (1-m)*_SofteningTemperature['SiO2'] + m*_SofteningTemperature['GeO2']
 def _calcPoissonRatio(m):
+    """calculate Poisson ration"""
     if (m <= 0):
         return _PoissonRatio['SiO2']
     return (1-m)*_PoissonRatio['SiO2'] + m*_PoissonRatio['GeO2']
 def _calcPhotoelasticConstants(m):
+    """calculate photoelastic constants"""
     if (m <= 0):
         return _PhotoelasticConstants['SiO2']
     return [(1-m)*_PhotoelasticConstants['SiO2'][0] + m*_PhotoelasticConstants['GeO2'][0],
             (1-m)*_PhotoelasticConstants['SiO2'][1] + m*_PhotoelasticConstants['GeO2'][1]]
 def _calcYoungModulus(m):
+    """calculate Youngs Modulus"""
     if (m <= 0):
         return _YoungModulus['SiO2']
     return (1-m)*_YoungModulus['SiO2'] + m*_YoungModulus['GeO2']
 
-# Calculate birefringences due to core noncircularity, asymmetric thermal stress,
-# bending, and twisting
 def _calc_B_CNC(epsilon, n0, n1, r0, v):
+    """birefringence due to core noncircularity"""
     return (epsilonToEccSq(epsilon, signFlag=-1)*(1 - n1**2/n0**2)**(3/2))/(r0) * (4/v**3) * (np.log(v))**3 / (1 + np.log(v))
 def _calc_B_ATS(w0, r0, n0, beta, v, p11, p12, alpha0, alpha1, T0, TS, nu_p, epsilon):
+    """birefringence due to asymmetric thermal stress"""
     return (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(p11 - p12)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*((epsilon - 1)/(epsilon + 1)))
 def _calc_B_BND(w0, n0, p11, p12, nu_p, r0, rc, E, tf = 0):
+    """birefringence due to bending"""
     if (rc == 0):
         return 0
     return (2*pi/w0)*((n0**3)/2)*(p11-p12)*(1+nu_p)*(0.5*(r0**2/rc**2) + ((2-3*nu_p)/(1-nu_p))*(r0/rc)*(tf/(pi*(r0**2)*E)))
 def _calc_B_TWS(n0, p11, p12, tr):
+    """birefringence due to twisting"""
     return (1+((n0**2)/2)*(p11-p12))*(tr)
 
-def _calc_deltaB_CNC(epsilon, n0, n1, r0, v):
+def _calc_deltaB_CNC(epsilon: float, n0: float, n1: float, r0: float, v:float) -> npt.NDArray[3]:
+    """
+    :return: [avg, min, max] transit time through the fiber 
+    """
     dbx = -((1 - n1**2/n0**2)**(3/2))/(r0) * (2*(np.log(v))**2/v**3) * (1 - (np.log(v)/(1+np.log(v)))*epsilonToEccSq(epsilon, signFlag=-1))
     dby = -((1 - n1**2/n0**2)**(3/2))/(r0) * (2*(np.log(v))**2/v**3) * (1 + (np.log(v)/(1+np.log(v)))*epsilonToEccSq(epsilon, signFlag=-1))
     return np.array([(dbx+dby)/2, dbx, dby])
-def _calc_deltaB_ATS(w0, r0, n0, beta, v, p11, p12, alpha0, alpha1, T0, TS, nu_p, epsilon):
+def _calc_deltaB_ATS(w0: float, r0: float, n0: float, beta: float, v: float, p11:float, 
+        p12: float, alpha0: float, alpha1: float, T0: float, TS: float, nu_p: float, epsilon: float) -> npt.NDArray[3]:
+    """
+    :return: [avg, min, max] transit time through the fiber 
+    """
     dbx = (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*(1/(r0*(np.sqrt(epsilon) + 1/np.sqrt(epsilon)))))*(p11*r0*np.sqrt(epsilon) + p12*r0/np.sqrt(epsilon))
     dby = (2*pi/w0)*(1-((r0**2)*((n0**2)*(2*pi/w0)**2 - beta**2))/(v**2))*(0.5*(n0**3)*(alpha1 - alpha0)*np.abs(TS - T0)/(1 - nu_p**2)*(1/(r0*(np.sqrt(epsilon) + 1/np.sqrt(epsilon)))))*(p12*r0*np.sqrt(epsilon) + p11*r0/np.sqrt(epsilon))
     return np.array([(dbx+dby)/2, dbx, dby])
-def _calc_deltaB_BND(w0, n0, p11, p12, nu_p, r0, rc, E, tf = 0):
+def _calc_deltaB_BND(w0: float, n0: float, p11: float, p12: float, nu_p: float, r0: float, rc: 
+                     float, E: float, tf: float = 0) -> npt.NDArray[3]:
+    """
+    :return: [avg, min, max] transit time through the fiber 
+    """
     if (rc == 0):
         return np.array([0, 0, 0])
     dbx = (2*pi/w0)*(n0**3/4)*p11*(1+nu_p)*(r0**2/rc**2)
@@ -726,9 +743,10 @@ class FiberLength():
         dndw = (dndwP + dndwM)/2
         return nb - wb*(dndw)
 
-    def calcPhaseDelay(self):
+    def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
         Calculates the time (s) for the light to propagate through the fiber.
+        :return: [avg, min, max] transit time through the fiber 
         """
         n0, n1 = _calcNs(self.w0, self.T0, self.m0, self.m1)
         v = _calcV(self.r0, self.w0, n0, n1)
@@ -838,7 +856,7 @@ class FiberPaddleSet():
     def finalTwistBool(self): return self._ftb
 
     @property
-    def fibers(self):
+    def fibers(self) -> npt.NDArray[npt.Object]:
         # Build the FiberLengths array
         fa = np.array([], dtype=object)
         angs = np.concatenate(([0], self.angles))
@@ -982,9 +1000,10 @@ class FiberPaddleSet():
         sep = '\n'
         return sep.join(info_array)
 
-    def calcPhaseDelay(self):
+    def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
-        Method for calculating the time for the light to propagate through the fiber.
+        Method for calculating the time for the light to propagate through the fiber paddle set.
+        :return: [avg, min, max] transit time through the fiber
         """
         fa = self.fibers
         t0 = np.array([0,0,0])
@@ -1029,9 +1048,10 @@ class Rotator():
         """
         self.alpha = alpha/np.linalg.norm(alpha)
 
-    def calcPhaseDelay(self):
+    def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
         This is for compatibility only.
+        :return: [avg, min, max] transit time through the fiber
         """
         return np.array([0,0,0])
 
@@ -1104,24 +1124,37 @@ class Fiber():
     hingeDictKeys = np.array(['Ns', 'T0', 'Tref', 'angles', 'epsilon', 'finalTwistBool', 'gapLs', 'm0', 'm1', 'mProps', 'nPaddles', 'r0', 'r1', 'rps', 'tfs'])
     
     @property
-    def w0(self): return self._w0
+    def w0(self): 
+        """Wavelength of light (m)"""
+        return self._w0
     @w0.setter
     def w0(self, value):
+        """Wavelength of light (m)"""
         self._w0 = _validatePositive(value)
         
     @property
-    def N0(self): return self._N0
+    def N0(self): 
+        """Number of long segments"""
+        return self._N0
     @N0.setter
     def N0(self, value):
+        """Number of long segments"""
         self._N0 = _validatePositive(value)
 
     @property
-    def arbRotStart(self): return self._arbRotStart
+    def arbRotStart(self): 
+        """Boolean, whether to start the fiber with an arbitrary rotation (sometimes useful in simulatory applications)"""
+        return self._arbRotStart
     @arbRotStart.setter
     def arbRotStart(self, newVal):
+        """Boolean, whether to start the fiber with an arbitrary
+            rotation (sometimes useful in simulatory applications)"""
         self.toggleStartRotator(newVal)
     @property
-    def startRotator(self): return self._startRotator
+    def startRotator(self): 
+        """The Rotator at the start of the fiber 
+        (always a Rotator object, but its Jones matrix is the identity if arbRotStart is False)"""
+        return self._startRotator
 
     @property
     def addRotators(self): return self._addRotators
@@ -1129,10 +1162,14 @@ class Fiber():
     def addRotators(self, newVal):
         self.toggleAddedRotators(newVal)
     @property
-    def addedRotators(self): return self._addedRotators
+    def addedRotators(self): 
+        """A dictionary of rotator parameters and fiber lengths for the
+            arbitrary rotators along the long fiber segments, when addRotators is not None"""
+        return self._addedRotators
 
     @property
     def fibers(self):
+        """The array of FiberLength and FiberPaddleSet objects constituting the fiber"""
         # The actual number of hinges
         N0h = self.N0-1 + int(self.hingeStart) + int(self.hingeEnd)
         # Take some compliance measures on the dictionaries
@@ -1312,6 +1349,7 @@ class Fiber():
         
     @property
     def J0(self):
+        """The total Jones matrix of the fiber"""
         fa = self.fibers
         Jtot = np.array([[1,0],[0,1]])
         for i in range(len(fa)):
@@ -1319,6 +1357,7 @@ class Fiber():
         return Jtot
     @property
     def L0(self):
+        """The total length of the fiber"""
         fa = 0; hingeInds = 0
         if (self._printingBool):
             fa, hingeInds = self.fibers
@@ -1623,9 +1662,10 @@ class Fiber():
     
         return cls(w0, newSegmentDict, newHingeDict, N0, hingeType = hingeType, hingeStart = hingeStart, hingeEnd = hingeEnd, arbRotStart = arbRotStart, addRotators = addRotators)
 
-    def calcPhaseDelay(self):
+    def calcPhaseDelay(self) -> npt.NDArray[3]:
         """
         Method for calculating the time for the light to propagate through the fiber.
+        :return: [avg, min, max] transit time through the fiber
         """
         fa = self.fibers
         t0 = np.array([0,0,0])
